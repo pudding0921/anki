@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: ankiai-backend
+    env: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: GROQ_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        value: sqlite:///./ankiai.db
+      - key: UPLOAD_DIR
+        value: ./uploads
+      - key: OLLAMA_URL
+        value: ""
+      - key: OLLAMA_MODEL
+        value: llama3
+      - key: CARD_COUNT
+        value: "10"
+    disk:
+      name: ankiai-data
+      mountPath: /opt/render/project/src/backend
+      sizeGB: 1
