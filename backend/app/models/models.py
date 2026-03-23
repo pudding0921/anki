@@ -15,6 +15,20 @@ class User(Base):
 
     decks = relationship("Deck", back_populates="owner", cascade="all, delete-orphan")
     reviews = relationship("Review", back_populates="user", cascade="all, delete-orphan")
+    folders = relationship("Folder", back_populates="owner", cascade="all, delete-orphan")
+
+
+class Folder(Base):
+    __tablename__ = "folders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    deleted_at = Column(DateTime, nullable=True, default=None)
+
+    owner = relationship("User", back_populates="folders")
+    decks = relationship("Deck", back_populates="folder")
 
 
 class Deck(Base):
@@ -24,9 +38,12 @@ class Deck(Base):
     name = Column(String, nullable=False)
     description = Column(Text, default="")
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    folder_id = Column(Integer, ForeignKey("folders.id"), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    deleted_at = Column(DateTime, nullable=True, default=None)
 
     owner = relationship("User", back_populates="decks")
+    folder = relationship("Folder", back_populates="decks")
     cards = relationship("Card", back_populates="deck", cascade="all, delete-orphan")
 
 
@@ -42,6 +59,8 @@ class Card(Base):
     image_width = Column(Integer, nullable=True)
     image_height = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    deleted_at = Column(DateTime, nullable=True, default=None)
 
     # SM-2 spaced repetition
     sm2_interval = Column(Integer, default=1)

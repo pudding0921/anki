@@ -1,7 +1,10 @@
+import asyncio
 import json
 import logging
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -15,12 +18,16 @@ from app.core.config import settings
 from app.core.deps import get_current_user
 from app.database import get_db
 from app.models.models import Card, Deck, OcclusionZone, User
-from app.schemas.schemas import CardOut, GenerateCardsResponse, OcclusionCardCreate
+from app.schemas.schemas import CardOut, GenerateCardsResponse, OcclusionCardCreate, OcclusionZoneCreate
 
 
 class CardUpdateRequest(BaseModel):
     front: str = ""
     back: str = ""
+
+
+class ZonesReplaceRequest(BaseModel):
+    zones: List[OcclusionZoneCreate]
 from app.services.llm import generate_flashcards
 from app.services.ocr import extract_text
 from app.services.ai_occlusion import zones_for_pdf_page, zones_for_image, diagram_cards_for_pdf_page
@@ -188,44 +195,73 @@ async def batch_occlusion(
     user_dir = os.path.join(_ABS_UPLOAD_DIR, str(current_user.id))
     os.makedirs(user_dir, exist_ok=True)
 
-    # Cache open PDF documents to avoid re-opening per page
-    pdf_docs: dict = {}
-
-    for page in pages:
+    def _process_page_sync(page: dict) -> dict:
+        """Run all AI work for one page in a thread. Returns a result dict."""
         image_path = page["image_path"]
         img_w = int(page["width"])
         img_h = int(page["height"])
         page_num = page.get("page", 1)
         source_pdf = page.get("source_pdf")
-        fitz_page = None
+
+        zones = []
+        diagram_specs = []
 
         if source_pdf:
-            # PDF path: use PyMuPDF word extraction directly (most reliable)
             abs_pdf = _resolve_upload_path(source_pdf)
-            if abs_pdf not in pdf_docs:
+            try:
+                import fitz
+                doc = fitz.open(abs_pdf)
+                fitz_page = doc[page_num - 1]
+                zones = zones_for_pdf_page(fitz_page, scale=2.0, checklist_text=checklist_text)
                 try:
-                    import fitz
-                    pdf_docs[abs_pdf] = fitz.open(abs_pdf)
+                    diagram_specs = diagram_cards_for_pdf_page(fitz_page)
                 except Exception as e:
-                    logger.warning(f"Could not open PDF {abs_pdf}: {e}")
-                    pdf_docs[abs_pdf] = None
-            doc = pdf_docs.get(abs_pdf)
-            if doc is None:
-                skipped += 1
-                results.append({"page": page_num, "status": "error", "reason": "pdf not found"})
-                continue
-            fitz_page = doc[page_num - 1]  # 0-indexed
-            zones = zones_for_pdf_page(fitz_page, scale=2.0, checklist_text=checklist_text)
+                    logger.warning(f"Diagram detection failed on page {page_num}: {e}")
+                doc.close()
+            except Exception as e:
+                logger.warning(f"Could not open PDF {abs_pdf}: {e}")
+                return {"page": page_num, "status": "error", "reason": "pdf not found",
+                        "image_path": image_path, "img_w": img_w, "img_h": img_h,
+                        "zones": [], "diagram_specs": []}
         else:
-            # Plain image upload
             abs_path = _resolve_upload_path(image_path)
             if not os.path.exists(abs_path):
-                skipped += 1
-                results.append({"page": page_num, "status": "error", "reason": "file not found"})
-                continue
+                return {"page": page_num, "status": "error", "reason": "file not found",
+                        "image_path": image_path, "img_w": img_w, "img_h": img_h,
+                        "zones": [], "diagram_specs": []}
             with open(abs_path, "rb") as f:
                 image_bytes = f.read()
             zones = zones_for_image(image_bytes, img_w, img_h, checklist_text=checklist_text)
+
+        return {
+            "page": page_num,
+            "image_path": image_path,
+            "img_w": img_w,
+            "img_h": img_h,
+            "zones": zones,
+            "diagram_specs": diagram_specs,
+        }
+
+    # Run all pages in parallel — each page's LLM call is independent
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=min(len(pages), 8)) as executor:
+        page_results = await asyncio.gather(
+            *[loop.run_in_executor(executor, _process_page_sync, p) for p in pages]
+        )
+
+    # Write results to DB sequentially (SQLAlchemy session is not thread-safe)
+    for pr in page_results:
+        page_num = pr["page"]
+        image_path = pr["image_path"]
+        img_w = pr["img_w"]
+        img_h = pr["img_h"]
+        zones = pr["zones"]
+        diagram_specs = pr["diagram_specs"]
+
+        if pr.get("status") == "error":
+            skipped += 1
+            results.append({"page": page_num, "status": "error", "reason": pr.get("reason", "")})
+            continue
 
         page_result: dict = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
 
@@ -241,7 +277,6 @@ async def batch_occlusion(
             )
             db.add(card)
             db.flush()
-
             for z in zones:
                 db.add(OcclusionZone(
                     card_id=card.id,
@@ -251,7 +286,6 @@ async def batch_occlusion(
                     width=z["width"],
                     height=z["height"],
                 ))
-
             created += 1
             page_result["status"] = "created"
             page_result["zones"] = len(zones)
@@ -259,58 +293,38 @@ async def batch_occlusion(
             skipped += 1
             page_result["reason"] = "no text zones found"
 
-        # ── Diagram cards ── detect embedded images on PDF pages and create
-        # a separate occlusion card for each significant diagram found.
-        if fitz_page is not None:
-            try:
-                diagram_specs = diagram_cards_for_pdf_page(fitz_page)
-            except Exception as e:
-                logger.warning(f"Diagram detection failed on page {page_num}: {e}")
-                diagram_specs = []
-
-            for spec in diagram_specs:
-                diag_ext = spec["ext"] if spec["ext"] in ("png", "jpg", "jpeg") else "png"
-                diag_name = f"{uuid.uuid4()}.{diag_ext}"
-                diag_abs = os.path.join(user_dir, diag_name)
-
-                with open(diag_abs, "wb") as f:
-                    f.write(spec["image_bytes"])
-
-                diag_image_path = f"/uploads/{current_user.id}/{diag_name}"
-
-                diag_card = Card(
-                    deck_id=deck.id,
-                    card_type="occlusion",
-                    front="",
-                    back="",
-                    image_path=diag_image_path,
-                    image_width=spec["width"],
-                    image_height=spec["height"],
-                )
-                db.add(diag_card)
-                db.flush()
-
-                for z in spec["zones"]:
-                    db.add(OcclusionZone(
-                        card_id=diag_card.id,
-                        label=z["label"],
-                        x=z["x"],
-                        y=z["y"],
-                        width=z["width"],
-                        height=z["height"],
-                    ))
-
-                created += 1
-                page_result["diagrams"] = page_result.get("diagrams", 0) + 1
-                if page_result["status"] == "skipped":
-                    page_result["status"] = "created"
+        for spec in diagram_specs:
+            diag_ext = spec["ext"] if spec["ext"] in ("png", "jpg", "jpeg") else "png"
+            diag_name = f"{uuid.uuid4()}.{diag_ext}"
+            with open(os.path.join(user_dir, diag_name), "wb") as f:
+                f.write(spec["image_bytes"])
+            diag_image_path = f"/uploads/{current_user.id}/{diag_name}"
+            diag_card = Card(
+                deck_id=deck.id,
+                card_type="occlusion",
+                front="",
+                back="",
+                image_path=diag_image_path,
+                image_width=spec["width"],
+                image_height=spec["height"],
+            )
+            db.add(diag_card)
+            db.flush()
+            for z in spec["zones"]:
+                db.add(OcclusionZone(
+                    card_id=diag_card.id,
+                    label=z["label"],
+                    x=z["x"],
+                    y=z["y"],
+                    width=z["width"],
+                    height=z["height"],
+                ))
+            created += 1
+            page_result["diagrams"] = page_result.get("diagrams", 0) + 1
+            if page_result["status"] == "skipped":
+                page_result["status"] = "created"
 
         results.append(page_result)
-
-    # Close any open PDF documents
-    for doc in pdf_docs.values():
-        if doc is not None:
-            doc.close()
 
     db.commit()
     return {"created": created, "skipped": skipped, "deck_id": deck.id, "results": results}
@@ -359,6 +373,40 @@ def create_occlusion_card(
     return card
 
 
+@router.put("/{card_id}/zones", response_model=CardOut)
+def replace_card_zones(
+    card_id: int,
+    payload: ZonesReplaceRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Replace all occlusion zones for a card with a new set."""
+    card = (
+        db.query(Card)
+        .join(Deck)
+        .filter(Card.id == card_id, Deck.user_id == current_user.id, Card.deleted_at == None)
+        .first()
+    )
+    if not card:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
+
+    db.query(OcclusionZone).filter(OcclusionZone.card_id == card_id).delete()
+
+    for z in payload.zones:
+        db.add(OcclusionZone(
+            card_id=card.id,
+            label=z.label,
+            x=z.x,
+            y=z.y,
+            width=z.width,
+            height=z.height,
+        ))
+
+    db.commit()
+    db.refresh(card)
+    return card
+
+
 @router.put("/{card_id}", response_model=CardOut)
 def update_card(
     card_id: int,
@@ -369,7 +417,7 @@ def update_card(
     card = (
         db.query(Card)
         .join(Deck)
-        .filter(Card.id == card_id, Deck.user_id == current_user.id)
+        .filter(Card.id == card_id, Deck.user_id == current_user.id, Card.deleted_at == None)
         .first()
     )
     if not card:
@@ -409,10 +457,10 @@ def delete_card(
     card = (
         db.query(Card)
         .join(Deck)
-        .filter(Card.id == card_id, Deck.user_id == current_user.id)
+        .filter(Card.id == card_id, Deck.user_id == current_user.id, Card.deleted_at == None)
         .first()
     )
     if not card:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Card not found")
-    db.delete(card)
+    card.deleted_at = datetime.now(timezone.utc)
     db.commit()

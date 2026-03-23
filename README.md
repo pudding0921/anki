@@ -1,4 +1,4 @@
-# AnkiAI
+# FlowCard
 
 AI-powered flashcard generator. Upload lecture slides (PDF or image) and the AI automatically creates Anki-ready occlusion and Q&A flashcards.
 
@@ -7,7 +7,7 @@ AI-powered flashcard generator. Upload lecture slides (PDF or image) and the AI 
 ## Repository structure
 
 ```
-ankiai/
+flowcard/
 ├── backend/          ← FastAPI + Python (AI pipeline, database, API)
 ├── frontend/         ← Next.js 16 (UI, pages, components)
 ├── docker-compose.yml

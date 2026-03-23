@@ -17,14 +17,14 @@ def get_due_cards(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    deck = db.query(Deck).filter(Deck.id == deck_id, Deck.user_id == current_user.id).first()
+    deck = db.query(Deck).filter(Deck.id == deck_id, Deck.user_id == current_user.id, Deck.deleted_at == None).first()
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not found")
 
     now = datetime.now(timezone.utc)
     due_cards = (
         db.query(Card)
-        .filter(Card.deck_id == deck_id, Card.sm2_due_date <= now)
+        .filter(Card.deck_id == deck_id, Card.sm2_due_date <= now, Card.deleted_at == None)
         .all()
     )
     return due_cards

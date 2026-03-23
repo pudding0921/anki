@@ -138,7 +138,7 @@ export default function CreatePage() {
 
       <div className="max-w-2xl mx-auto px-8 py-12 flex flex-col gap-8">
         {error && (
-          <p className="text-sm text-red-500 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+          <p className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-xl px-4 py-3">
             {error}
           </p>
         )}
@@ -166,8 +166,7 @@ export default function CreatePage() {
         {step === "input" && mode === "occlusion" && (
           <div className="flex flex-col gap-4">
             <p className="text-sm text-muted-foreground">
-              Upload lecture slides (PDF) or an image, draw rectangles over the
-              content you want to hide, and save occlusion cards.
+              Upload lecture slides (PDF) or an image. The AI automatically identifies key terms and places occlusion zones — you review and adjust before saving.
             </p>
             <Link
               href="/create/occlusion"

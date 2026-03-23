@@ -111,6 +111,21 @@ class DeckOut(BaseModel):
     user_id: int
     created_at: datetime
     card_count: int = 0
+    folder_id: Optional[int] = None
+
+    model_config = {"from_attributes": True}
+
+
+class FolderCreate(BaseModel):
+    name: str
+
+
+class FolderOut(BaseModel):
+    id: int
+    name: str
+    user_id: int
+    created_at: datetime
+    deck_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -124,6 +139,47 @@ class DeckWithCards(BaseModel):
     cards: List[CardOut] = []
 
     model_config = {"from_attributes": True}
+
+
+# --- Trash ---
+
+class TrashFolderOut(BaseModel):
+    id: int
+    name: str
+    deleted_at: datetime
+    days_remaining: int
+
+    model_config = {"from_attributes": True}
+
+
+class TrashDeckOut(BaseModel):
+    id: int
+    name: str
+    description: str
+    card_count: int
+    deleted_at: datetime
+    days_remaining: int
+
+    model_config = {"from_attributes": True}
+
+
+class TrashCardOut(BaseModel):
+    id: int
+    deck_id: int
+    deck_name: str
+    card_type: str
+    front: str
+    back: str
+    deleted_at: datetime
+    days_remaining: int
+
+    model_config = {"from_attributes": True}
+
+
+class TrashResponse(BaseModel):
+    folders: List[TrashFolderOut]
+    decks: List[TrashDeckOut]
+    cards: List[TrashCardOut]
 
 
 # --- SM-2 Study ---

@@ -1,10 +1,12 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useState, useRef, forwardRef, useImperativeHandle } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { apiFetch, API_URL } from "@/lib/api";
 import { useAuthGuard } from "@/lib/useAuthGuard";
+import OcclusionEditor, { Zone as EditorZone } from "@/components/OcclusionEditor";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 interface Zone {
   id: number;
@@ -34,17 +36,38 @@ interface Deck {
 
 // ── Text card editor ──────────────────────────────────────────────────────────
 
-function TextCardEditor({
-  card,
-  onDelete,
-}: {
-  card: Card;
-  onDelete: (id: number) => void;
-}) {
+interface TextCardHandle {
+  save: () => Promise<void>;
+  isDirty: () => boolean;
+}
+
+const TextCardEditor = forwardRef<TextCardHandle, { card: Card; onDelete: (id: number) => void }>(
+  function TextCardEditor({ card, onDelete }, ref) {
   const [front, setFront] = useState(card.front);
   const [back, setBack] = useState(card.back);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  const frontRef = useRef(front);
+  const backRef = useRef(back);
+  frontRef.current = front;
+  backRef.current = back;
+
+  useImperativeHandle(ref, () => ({
+    isDirty: () => frontRef.current !== card.front || backRef.current !== card.back,
+    save: async () => {
+      if (frontRef.current === card.front && backRef.current === card.back) return;
+      setSaving(true);
+      await apiFetch(`/api/cards/${card.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ front: frontRef.current, back: backRef.current }),
+      });
+      setSaving(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    },
+  }));
 
   async function save() {
     setSaving(true);
@@ -99,34 +122,55 @@ function TextCardEditor({
           <Button size="sm" onClick={save} disabled={saving}>
             {saving ? "Saving…" : "Save"}
           </Button>
-          {saved && <span className="text-xs text-green-600">Saved!</span>}
+          {saved && <span className="text-xs text-emerald-400">Saved!</span>}
         </div>
       )}
     </div>
   );
-}
+});
 
 // ── Occlusion card editor ─────────────────────────────────────────────────────
 
 function OcclusionCardEditor({
   card,
   onDelete,
-  onZoneDeleted,
 }: {
   card: Card;
   onDelete: (id: number) => void;
-  onZoneDeleted: (cardId: number, zoneId: number) => void;
 }) {
-  const [zones, setZones] = useState(card.occlusion_zones);
-
-  async function deleteZone(zoneId: number) {
-    await apiFetch(`/api/cards/zones/${zoneId}`, { method: "DELETE" });
-    setZones((prev) => prev.filter((z) => z.id !== zoneId));
-    onZoneDeleted(card.id, zoneId);
-  }
+  const [saved, setSaved] = useState(false);
 
   const imgW = card.image_width ?? 800;
   const imgH = card.image_height ?? 600;
+
+  const initialZones: EditorZone[] = card.occlusion_zones.map((z) => ({
+    id: String(z.id),
+    x: z.x,
+    y: z.y,
+    width: z.width,
+    height: z.height,
+    label: z.label,
+  }));
+
+  async function handleSave(zones: EditorZone[]) {
+    await apiFetch(`/api/cards/${card.id}/zones`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        zones: zones.map((z) => ({
+          label: z.label,
+          x: z.x,
+          y: z.y,
+          width: z.width,
+          height: z.height,
+        })),
+      }),
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  if (!card.image_path) return null;
 
   return (
     <div className="border rounded-xl p-5 flex flex-col gap-3">
@@ -134,101 +178,36 @@ function OcclusionCardEditor({
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-widest">
           Image Occlusion
         </span>
-        <button
-          className="text-xs text-red-400 hover:text-red-600"
-          onClick={() => onDelete(card.id)}
-        >
-          Delete card
-        </button>
+        <div className="flex items-center gap-3">
+          {saved && <span className="text-xs text-emerald-400">Saved!</span>}
+          <button
+            className="text-xs text-red-400 hover:text-red-600"
+            onClick={() => onDelete(card.id)}
+          >
+            Delete card
+          </button>
+        </div>
       </div>
 
-      {card.image_path ? (
-        <>
-          <p className="text-xs text-muted-foreground">
-            Click any highlighted zone to remove it.
-          </p>
-          <div className="relative w-full rounded-lg border overflow-hidden">
-            <img
-              src={`${API_URL}${card.image_path}`}
-              alt="slide"
-              className="block w-full h-auto"
-            />
-            <svg
-              viewBox={`0 0 ${imgW} ${imgH}`}
-              preserveAspectRatio="none"
-              className="absolute inset-0 w-full h-full"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              {zones.map((zone) => (
-                <g
-                  key={zone.id}
-                  className="group cursor-pointer"
-                  onClick={() => deleteZone(zone.id)}
-                >
-                  <rect
-                    x={zone.x}
-                    y={zone.y}
-                    width={zone.width}
-                    height={zone.height}
-                    fill="rgba(30,58,95,0.55)"
-                    stroke="#1e40af"
-                    strokeWidth="2"
-                    className="group-hover:fill-red-500/60 group-hover:stroke-red-600 transition-colors"
-                    rx="3"
-                  />
-                  <text
-                    x={zone.x + zone.width / 2}
-                    y={zone.y + zone.height / 2}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    fill="white"
-                    fontSize={Math.max(10, Math.min(16, zone.height * 0.45))}
-                    fontWeight="bold"
-                    className="pointer-events-none select-none"
-                  >
-                    {zone.label}
-                  </text>
-                </g>
-              ))}
-            </svg>
-          </div>
-          {zones.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">No zones remaining</p>
-          )}
-        </>
-      ) : (
-        <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-muted-foreground">
-            Occlusion zones — remove any that cover irrelevant terms
-          </span>
-          {zones.length === 0 ? (
-            <p className="text-xs text-muted-foreground italic">No zones remaining</p>
-          ) : (
-            <div className="flex flex-wrap gap-2 mt-1">
-              {zones.map((zone) => (
-                <div
-                  key={zone.id}
-                  className="flex items-center gap-1 border rounded-full px-3 py-1 text-sm bg-muted/40"
-                >
-                  <span>{zone.label}</span>
-                  <button
-                    className="text-red-400 hover:text-red-600 ml-1 font-bold leading-none"
-                    title="Remove this zone"
-                    onClick={() => deleteZone(zone.id)}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      <OcclusionEditor
+        imageUrl={`${API_URL}${card.image_path}`}
+        imageWidth={imgW}
+        imageHeight={imgH}
+        initialZones={initialZones}
+        saveLabel="Save zones"
+        onSave={handleSave}
+      />
     </div>
   );
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
+
+interface EditConfirmState {
+  isOpen: boolean;
+  cardId: number;
+  cardFront: string;
+}
 
 function EditContent() {
   useAuthGuard();
@@ -239,6 +218,14 @@ function EditContent() {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [exiting, setExiting] = useState(false);
+  const [confirmState, setConfirmState] = useState<EditConfirmState>({
+    isOpen: false,
+    cardId: 0,
+    cardFront: "",
+  });
+
+  const textCardRefs = useRef<Map<number, TextCardHandle>>(new Map());
 
   useEffect(() => {
     if (!deckId) { setError("No deck selected."); setLoading(false); return; }
@@ -249,25 +236,30 @@ function EditContent() {
       .finally(() => setLoading(false));
   }, [deckId]);
 
-  async function deleteCard(cardId: number) {
+  function requestDeleteCard(cardId: number) {
+    const card = deck?.cards.find((c) => c.id === cardId);
+    setConfirmState({
+      isOpen: true,
+      cardId,
+      cardFront: card?.front || "(Image Occlusion)",
+    });
+  }
+
+  async function confirmDeleteCard() {
+    const cardId = confirmState.cardId;
+    setConfirmState((prev) => ({ ...prev, isOpen: false }));
     await apiFetch(`/api/cards/${cardId}`, { method: "DELETE" });
+    textCardRefs.current.delete(cardId);
     setDeck((prev) =>
       prev ? { ...prev, cards: prev.cards.filter((c) => c.id !== cardId) } : prev
     );
   }
 
-  function handleZoneDeleted(cardId: number, zoneId: number) {
-    setDeck((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        cards: prev.cards.map((c) =>
-          c.id === cardId
-            ? { ...c, occlusion_zones: c.occlusion_zones.filter((z) => z.id !== zoneId) }
-            : c
-        ),
-      };
-    });
+  async function saveAndExit() {
+    setExiting(true);
+    const saves = Array.from(textCardRefs.current.values()).map((ref) => ref.save());
+    await Promise.all(saves);
+    router.push("/dashboard");
   }
 
   if (loading) {
@@ -292,7 +284,7 @@ function EditContent() {
 
   return (
     <main className="min-h-screen bg-background">
-      <nav className="flex items-center justify-between px-8 py-5 border-b">
+      <nav className="sticky top-0 z-20 bg-background/95 backdrop-blur border-b flex items-center justify-between px-8 py-4">
         <button
           className="text-sm text-muted-foreground hover:text-foreground"
           onClick={() => router.push("/dashboard")}
@@ -300,9 +292,9 @@ function EditContent() {
           ← Dashboard
         </button>
         <span className="font-semibold truncate max-w-xs">Edit: {deck.name}</span>
-        <span className="text-sm text-muted-foreground">
-          {deck.cards.length} card{deck.cards.length !== 1 ? "s" : ""}
-        </span>
+        <Button size="sm" onClick={saveAndExit} disabled={exiting}>
+          {exiting ? "Saving…" : "Save & Exit"}
+        </Button>
       </nav>
 
       <div className="max-w-2xl mx-auto px-8 py-10 flex flex-col gap-8">
@@ -315,15 +307,14 @@ function EditContent() {
             <h2 className="font-semibold text-lg">
               Image Occlusion cards
               <span className="ml-2 text-sm font-normal text-muted-foreground">
-                — remove zones that cover irrelevant terms
+                — drag to add zones, click to select, resize or delete
               </span>
             </h2>
             {occlusionCards.map((card) => (
               <OcclusionCardEditor
                 key={card.id}
                 card={card}
-                onDelete={deleteCard}
-                onZoneDeleted={handleZoneDeleted}
+                onDelete={requestDeleteCard}
               />
             ))}
           </section>
@@ -333,11 +324,27 @@ function EditContent() {
           <section className="flex flex-col gap-4">
             <h2 className="font-semibold text-lg">Flashcards</h2>
             {textCards.map((card) => (
-              <TextCardEditor key={card.id} card={card} onDelete={deleteCard} />
+              <TextCardEditor
+                key={card.id}
+                ref={(el) => {
+                  if (el) textCardRefs.current.set(card.id, el);
+                  else textCardRefs.current.delete(card.id);
+                }}
+                card={card}
+                onDelete={requestDeleteCard}
+              />
             ))}
           </section>
         )}
       </div>
+
+      <ConfirmDialog
+        isOpen={confirmState.isOpen}
+        itemType="card"
+        itemName={confirmState.cardFront}
+        onConfirm={confirmDeleteCard}
+        onCancel={() => setConfirmState((prev) => ({ ...prev, isOpen: false }))}
+      />
     </main>
   );
 }

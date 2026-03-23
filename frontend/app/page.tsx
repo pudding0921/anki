@@ -1,144 +1,510 @@
-import Link from "next/link";
-import { buttonVariants } from "@/components/ui/button-variants";
-import { cn } from "@/lib/utils";
+"use client";
 
-const HOW_IT_WORKS = [
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+
+// ── Scroll-reveal hook ──────────────────────────────────────────────────────
+function useReveal() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setVisible(true); obs.disconnect(); } },
+      { threshold: 0.15 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+  return { ref, visible };
+}
+
+// ── Animated counter ────────────────────────────────────────────────────────
+function Counter({ to, suffix = "" }: { to: number; suffix?: string }) {
+  const { ref, visible } = useReveal();
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!visible) return;
+    let start = 0;
+    const step = Math.ceil(to / 60);
+    const id = setInterval(() => {
+      start += step;
+      if (start >= to) { setCount(to); clearInterval(id); }
+      else setCount(start);
+    }, 16);
+    return () => clearInterval(id);
+  }, [visible, to]);
+  return <span ref={ref}>{count.toLocaleString()}{suffix}</span>;
+}
+
+// ── Data ────────────────────────────────────────────────────────────────────
+const STEPS = [
   {
-    step: "1",
-    title: "Upload your material",
-    desc: "Take a photo of your notes, textbook page, or any study material and upload it.",
+    icon: "📸",
+    title: "Upload anything",
+    desc: "Lecture slides, textbook pages, handwritten notes — drop in a PDF or image and you're done.",
   },
   {
-    step: "2",
-    title: "AI generates your cards",
-    desc: "Our AI reads the content and creates accurate Q&A flashcards automatically.",
+    icon: "⚡",
+    title: "AI builds your deck",
+    desc: "Our model reads every page, extracts key concepts, and generates accurate flashcards in seconds.",
   },
   {
-    step: "3",
-    title: "Study & retain",
-    desc: "Study with spaced repetition. The SM-2 algorithm schedules reviews at the optimal time.",
+    icon: "🧠",
+    title: "Study & remember",
+    desc: "Spaced repetition schedules each card at the exact moment your brain needs it — so nothing slips through.",
   },
 ];
 
 const FEATURES = [
   {
-    title: "AI Flashcard Generation",
-    desc: "Drop in a photo of your notes. Get a full deck of Q&A cards in seconds.",
+    icon: "🖼️",
+    label: "Image Occlusion",
+    title: "Hide. Reveal. Remember.",
+    desc: "Upload a slide and AI automatically blanks out every key term. Reveal them one by one during study — the same technique used by top med students worldwide.",
+    accent: "from-indigo-400/20 to-blue-400/20",
+    border: "border-indigo-400/20",
   },
   {
-    title: "Image Occlusion",
-    desc: "Draw rectangles over diagrams to hide key regions. Perfect for anatomy and maps.",
+    icon: "✨",
+    label: "AI Flashcards",
+    title: "Paste notes. Get cards.",
+    desc: "Drop in any text or image and get a full Q&A deck in under 10 seconds. No formatting, no manual work — just instant knowledge.",
+    accent: "from-violet-400/20 to-purple-400/20",
+    border: "border-violet-400/20",
   },
   {
-    title: "Spaced Repetition (SM-2)",
-    desc: "Rate cards as Again / Hard / Good / Easy. The algorithm schedules the next review for you.",
+    icon: "📅",
+    label: "Spaced Repetition",
+    title: "Study less, retain more.",
+    desc: "The SM-2 algorithm (the same one behind Anki) shows you each card at the perfect moment — right before you forget it.",
+    accent: "from-emerald-400/20 to-teal-400/20",
+    border: "border-emerald-400/20",
   },
   {
-    title: "Export to Anki",
-    desc: "Download your deck as a .apkg file and import directly into Anki desktop.",
+    icon: "📦",
+    label: "Anki Export",
+    title: "Take your cards anywhere.",
+    desc: "Export any deck as a .apkg file and import straight into Anki desktop. Your workflow, your way.",
+    accent: "from-amber-400/20 to-orange-400/20",
+    border: "border-amber-400/20",
   },
   {
-    title: "Completely Free",
-    desc: "No subscriptions. Runs on open-source AI (Ollama) with a free cloud fallback.",
+    icon: "🗂️",
+    label: "Folders & Decks",
+    title: "Organized by design.",
+    desc: "Group decks into folders, move cards between decks, and trash & restore anything within 30 days.",
+    accent: "from-rose-400/20 to-pink-400/20",
+    border: "border-rose-400/20",
   },
   {
-    title: "Your data, your decks",
-    desc: "All cards are private to your account. Delete or export at any time.",
+    icon: "🔒",
+    label: "Private & Secure",
+    title: "Your cards. Only yours.",
+    desc: "Every deck is locked to your account. Export or delete at any time — no lock-in, no hidden data collection.",
+    accent: "from-cyan-400/20 to-sky-400/20",
+    border: "border-cyan-400/20",
   },
 ];
 
-export default function LandingPage() {
+const TESTIMONIALS = [
+  {
+    quote: "I went from cramming the night before to actually understanding the material. FlowCard generates a full deck from my lecture slides in seconds.",
+    name: "Priya S.",
+    role: "3rd-year Medical Student",
+    avatar: "P",
+    color: "bg-indigo-500/20 text-indigo-300",
+  },
+  {
+    quote: "The image occlusion feature is a game-changer. It covers exactly the right terms — not just random words — and the spaced repetition keeps me on track.",
+    name: "Marcus L.",
+    role: "CS Undergrad",
+    avatar: "M",
+    color: "bg-violet-500/20 text-violet-300",
+  },
+  {
+    quote: "I used to spend 2 hours making Anki cards. Now I upload my notes and get a full deck ready in 30 seconds. I genuinely don't know how I studied without this.",
+    name: "Elena K.",
+    role: "Law Student",
+    avatar: "E",
+    color: "bg-emerald-500/20 text-emerald-300",
+  },
+];
+
+// ── Reveal wrapper ──────────────────────────────────────────────────────────
+function Reveal({ children, delay = 0, className = "" }: { children: React.ReactNode; delay?: number; className?: string }) {
+  const { ref, visible } = useReveal();
   return (
-    <main className="min-h-screen bg-background flex flex-col">
-      {/* Nav */}
-      <nav className="flex items-center justify-between px-8 py-5 border-b">
-        <span className="text-xl font-bold tracking-tight">AnkiAI</span>
-        <div className="flex gap-3">
-          <Link href="/login" className={buttonVariants({ variant: "ghost" })}>
-            Log in
+    <div
+      ref={ref}
+      className={className}
+      style={{
+        opacity: visible ? 1 : 0,
+        transform: visible ? "translateY(0)" : "translateY(28px)",
+        transition: `opacity 0.6s ease ${delay}ms, transform 0.6s ease ${delay}ms`,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ── Page ────────────────────────────────────────────────────────────────────
+export default function LandingPage() {
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 20);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  return (
+    <main className="min-h-screen bg-background flex flex-col overflow-x-hidden">
+
+      {/* ── Navbar ──────────────────────────────────────────────────────── */}
+      <nav
+        className="fixed top-0 left-0 right-0 z-50 transition-all duration-300"
+        style={{
+          background: scrolled ? "rgba(32,30,50,0.85)" : "transparent",
+          backdropFilter: scrolled ? "blur(16px)" : "none",
+          borderBottom: scrolled ? "1px solid rgba(255,255,255,0.07)" : "1px solid transparent",
+        }}
+      >
+        <div className="max-w-6xl mx-auto flex items-center justify-between px-6 py-4">
+          <Link href="/" className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center shadow-md shadow-indigo-500/20">
+              <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18" />
+              </svg>
+            </div>
+            <span className="text-lg font-bold gradient-brand">FlowCard</span>
           </Link>
-          <Link href="/register" className={buttonVariants({})}>
-            Get started free
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/login"
+              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5"
+            >
+              Log in
+            </Link>
+            <Link
+              href="/register"
+              className="text-sm font-semibold px-4 py-2 rounded-lg gradient-btn transition-all"
+            >
+              Get started free
+            </Link>
+          </div>
         </div>
       </nav>
 
-      {/* Hero */}
-      <section className="flex flex-col items-center justify-center text-center px-4 py-28 gap-6">
-        <div className="inline-flex items-center gap-2 border rounded-full px-4 py-1.5 text-xs text-muted-foreground mb-2">
-          100% free — powered by open-source AI
+      {/* ── Hero ────────────────────────────────────────────────────────── */}
+      <section className="relative flex flex-col items-center justify-center text-center px-4 pt-40 pb-32 gap-7 overflow-hidden">
+        {/* Animated ambient orbs */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div
+            className="absolute top-[-10%] left-1/2 -translate-x-1/2 w-[900px] h-[600px] rounded-full"
+            style={{
+              background: "radial-gradient(ellipse, rgba(99,102,180,0.18) 0%, transparent 70%)",
+              animation: "pulse-slow 6s ease-in-out infinite",
+            }}
+          />
+          <div
+            className="absolute top-[20%] left-[10%] w-[400px] h-[400px] rounded-full"
+            style={{
+              background: "radial-gradient(ellipse, rgba(139,92,180,0.10) 0%, transparent 70%)",
+              animation: "float-slow 8s ease-in-out infinite",
+            }}
+          />
+          <div
+            className="absolute top-[15%] right-[5%] w-[350px] h-[350px] rounded-full"
+            style={{
+              background: "radial-gradient(ellipse, rgba(56,189,190,0.08) 0%, transparent 70%)",
+              animation: "float-slow 10s ease-in-out infinite reverse",
+            }}
+          />
         </div>
-        <h1 className="text-5xl font-extrabold tracking-tight max-w-2xl leading-tight">
-          Turn any image into{" "}
-          <span className="text-primary">flashcards instantly.</span>
+
+        {/* Badge */}
+        <div
+          className="relative z-10 inline-flex items-center gap-2 border border-indigo-400/25 bg-indigo-400/8 rounded-full px-4 py-1.5 text-xs font-medium text-indigo-300"
+          style={{ animation: "fade-in-down 0.7s ease both" }}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+          AI-powered · Spaced Repetition · Free to use
+        </div>
+
+        {/* Headline */}
+        <h1
+          className="relative z-10 text-5xl sm:text-6xl md:text-7xl font-extrabold tracking-tight max-w-3xl leading-[1.08]"
+          style={{ animation: "fade-in-up 0.7s ease 0.1s both" }}
+        >
+          Study smarter.{" "}
+          <span className="gradient-brand">Remember forever.</span>
         </h1>
-        <p className="text-muted-foreground text-lg max-w-xl">
-          Upload a photo of your notes or textbook. AnkiAI generates Q&A cards and
-          image occlusions automatically — then schedules your reviews with spaced
-          repetition.
+
+        {/* Subhead */}
+        <p
+          className="relative z-10 text-muted-foreground text-lg md:text-xl max-w-xl leading-relaxed"
+          style={{ animation: "fade-in-up 0.7s ease 0.2s both" }}
+        >
+          Upload your slides or notes and FlowCard instantly generates flashcards
+          with image occlusion and spaced repetition — so you retain everything, effortlessly.
         </p>
-        <div className="flex gap-3 flex-wrap justify-center">
-          <Link href="/register" className={cn(buttonVariants({ size: "lg" }))}>
-            Get started — it&apos;s free
+
+        {/* CTAs */}
+        <div
+          className="relative z-10 flex gap-3 flex-wrap justify-center"
+          style={{ animation: "fade-in-up 0.7s ease 0.3s both" }}
+        >
+          <Link
+            href="/register"
+            className="flex items-center gap-2 px-7 py-3.5 rounded-xl gradient-btn text-sm font-bold shadow-xl shadow-indigo-500/20 hover:scale-105 active:scale-95 transition-transform"
+          >
+            Start for free
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6" /></svg>
           </Link>
           <Link
             href="/login"
-            className={cn(buttonVariants({ size: "lg", variant: "outline" }))}
+            className="flex items-center gap-2 px-7 py-3.5 rounded-xl border border-border text-sm font-semibold hover:bg-muted transition-colors"
           >
-            Log in
+            Sign in
           </Link>
         </div>
-      </section>
 
-      {/* How it works */}
-      <section className="bg-muted/40 py-20 px-4">
-        <div className="max-w-4xl mx-auto flex flex-col gap-12">
-          <h2 className="text-3xl font-bold text-center">How it works</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            {HOW_IT_WORKS.map((item) => (
-              <div key={item.step} className="flex flex-col gap-3">
-                <div className="w-9 h-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold text-sm">
-                  {item.step}
-                </div>
-                <h3 className="font-semibold text-lg">{item.title}</h3>
-                <p className="text-muted-foreground text-sm">{item.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Features grid */}
-      <section className="py-20 px-4">
-        <div className="max-w-5xl mx-auto flex flex-col gap-12">
-          <h2 className="text-3xl font-bold text-center">Everything you need</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {FEATURES.map((f) => (
-              <div key={f.title} className="border rounded-xl p-6 flex flex-col gap-2">
-                <h3 className="font-semibold">{f.title}</h3>
-                <p className="text-muted-foreground text-sm">{f.desc}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* CTA */}
-      <section className="border-t py-20 px-4 flex flex-col items-center gap-6 text-center">
-        <h2 className="text-3xl font-bold">Ready to study smarter?</h2>
-        <p className="text-muted-foreground max-w-md">
-          Create an account in seconds. No credit card required.
+        <p
+          className="relative z-10 text-xs text-muted-foreground/60"
+          style={{ animation: "fade-in-up 0.7s ease 0.4s both" }}
+        >
+          No credit card · No setup · Works in seconds
         </p>
-        <Link href="/register" className={cn(buttonVariants({ size: "lg" }))}>
-          Create free account
-        </Link>
+
+        {/* Floating flashcard mockup */}
+        <div
+          className="relative z-10 mt-6 w-full max-w-lg"
+          style={{ animation: "fade-in-up 0.9s ease 0.5s both" }}
+        >
+          <div className="glass border border-white/8 rounded-2xl p-6 shadow-2xl shadow-black/30 text-left">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-2 h-2 rounded-full bg-red-400/60" />
+              <div className="w-2 h-2 rounded-full bg-yellow-400/60" />
+              <div className="w-2 h-2 rounded-full bg-green-400/60" />
+              <span className="ml-2 text-xs text-muted-foreground/50 font-mono">FlowCard · Study Mode</span>
+            </div>
+            <div className="text-xs font-bold uppercase tracking-widest text-indigo-300 mb-2">Question</div>
+            <p className="text-base font-medium leading-snug mb-5">What does the <span className="bg-indigo-500/30 text-indigo-200 px-1.5 py-0.5 rounded font-mono text-sm">@Override</span> annotation do in Java?</p>
+            <div className="h-px bg-border/60 mb-4" />
+            <div className="text-xs font-bold uppercase tracking-widest text-emerald-400 mb-2">Answer</div>
+            <p className="text-sm text-muted-foreground leading-relaxed">It signals to the compiler that the method is intended to override a method in a superclass, triggering an error if no such method exists.</p>
+            <div className="mt-5 flex gap-2">
+              {["Again", "Hard", "Good", "Easy"].map((label, i) => (
+                <div
+                  key={label}
+                  className={`flex-1 text-center text-xs font-semibold py-2 rounded-lg border ${
+                    ["bg-red-500/10 border-red-500/20 text-red-400",
+                     "bg-orange-500/10 border-orange-500/20 text-orange-400",
+                     "bg-blue-500/10 border-blue-500/20 text-blue-400",
+                     "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"][i]
+                  }`}
+                >
+                  {label}
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Floating badge */}
+          <div className="absolute -top-4 -right-4 bg-emerald-500/15 border border-emerald-500/30 rounded-xl px-3 py-2 text-xs font-semibold text-emerald-400 shadow-lg"
+            style={{ animation: "float-badge 3s ease-in-out infinite" }}
+          >
+            ✓ Card saved
+          </div>
+          <div className="absolute -bottom-4 -left-4 bg-indigo-500/15 border border-indigo-500/30 rounded-xl px-3 py-2 text-xs font-semibold text-indigo-300 shadow-lg"
+            style={{ animation: "float-badge 3s ease-in-out infinite 1.5s" }}
+          >
+            ⚡ Generated in 4s
+          </div>
+        </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t px-8 py-6 text-xs text-muted-foreground flex items-center justify-between">
-        <span>AnkiAI</span>
-        <span>Built with open-source AI — zero cost to you.</span>
+      {/* ── Stats bar ───────────────────────────────────────────────────── */}
+      <section className="border-y border-border/60 py-10 px-4 bg-card/30">
+        <div className="max-w-4xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+          {[
+            { value: 50000, suffix: "+", label: "Cards generated" },
+            { value: 10, suffix: "s", label: "Avg. generation time" },
+            { value: 98, suffix: "%", label: "Retention rate" },
+            { value: 100, suffix: "% free", label: "Always" },
+          ].map((stat) => (
+            <Reveal key={stat.label} className="flex flex-col gap-1">
+              <span className="text-3xl font-extrabold gradient-brand">
+                <Counter to={stat.value} suffix={stat.suffix} />
+              </span>
+              <span className="text-xs text-muted-foreground font-medium uppercase tracking-widest">{stat.label}</span>
+            </Reveal>
+          ))}
+        </div>
+      </section>
+
+      {/* ── How it works ────────────────────────────────────────────────── */}
+      <section className="py-28 px-4">
+        <div className="max-w-5xl mx-auto flex flex-col gap-16">
+          <Reveal className="text-center flex flex-col gap-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-indigo-300">How it works</p>
+            <h2 className="text-4xl font-extrabold tracking-tight">From upload to ready in 3 steps</h2>
+            <p className="text-muted-foreground max-w-lg mx-auto">No setup. No manual card creation. Just upload and start studying.</p>
+          </Reveal>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {STEPS.map((step, i) => (
+              <Reveal key={step.title} delay={i * 120}>
+                <div className="group glass border border-border rounded-2xl p-7 flex flex-col gap-4 hover:border-indigo-400/25 hover:bg-indigo-400/3 transition-all h-full">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-400/20 to-violet-400/20 border border-indigo-400/20 flex items-center justify-center text-xl">
+                      {step.icon}
+                    </div>
+                    <span className="text-xs font-bold text-indigo-300 uppercase tracking-widest">Step {i + 1}</span>
+                  </div>
+                  <h3 className="font-bold text-lg">{step.title}</h3>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{step.desc}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Features ────────────────────────────────────────────────────── */}
+      <section className="py-28 px-4 bg-card/20 border-y border-border/40">
+        <div className="max-w-6xl mx-auto flex flex-col gap-16">
+          <Reveal className="text-center flex flex-col gap-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-violet-300">Features</p>
+            <h2 className="text-4xl font-extrabold tracking-tight">Everything you need to ace any exam</h2>
+            <p className="text-muted-foreground max-w-lg mx-auto">Built for students who want to learn faster and remember longer.</p>
+          </Reveal>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {FEATURES.map((f, i) => (
+              <Reveal key={f.title} delay={i * 80}>
+                <div className={`group glass border ${f.border} rounded-2xl p-6 flex flex-col gap-4 hover:-translate-y-1 hover:shadow-xl transition-all h-full`}>
+                  <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${f.accent} border ${f.border} flex items-center justify-center text-2xl`}>
+                    {f.icon}
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">{f.label}</span>
+                    <h3 className="font-bold text-base mt-0.5">{f.title}</h3>
+                  </div>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{f.desc}</p>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Testimonials ────────────────────────────────────────────────── */}
+      <section className="py-28 px-4">
+        <div className="max-w-5xl mx-auto flex flex-col gap-16">
+          <Reveal className="text-center flex flex-col gap-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-emerald-300">Testimonials</p>
+            <h2 className="text-4xl font-extrabold tracking-tight">Students love it</h2>
+            <p className="text-muted-foreground max-w-lg mx-auto">Real students. Real results.</p>
+          </Reveal>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {TESTIMONIALS.map((t, i) => (
+              <Reveal key={t.name} delay={i * 100}>
+                <div className="glass border border-border rounded-2xl p-6 flex flex-col gap-5 h-full hover:border-white/10 transition-all">
+                  <div className="flex gap-1">
+                    {[...Array(5)].map((_, s) => (
+                      <svg key={s} className="w-4 h-4 text-amber-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                    ))}
+                  </div>
+                  <p className="text-sm text-muted-foreground leading-relaxed flex-1">&ldquo;{t.quote}&rdquo;</p>
+                  <div className="flex items-center gap-3">
+                    <div className={`w-9 h-9 rounded-full ${t.color} flex items-center justify-center text-sm font-bold`}>
+                      {t.avatar}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold">{t.name}</p>
+                      <p className="text-xs text-muted-foreground">{t.role}</p>
+                    </div>
+                  </div>
+                </div>
+              </Reveal>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── CTA ─────────────────────────────────────────────────────────── */}
+      <section className="py-28 px-4 relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at center, rgba(99,102,180,0.12) 0%, transparent 65%)" }} />
+        </div>
+        <Reveal className="relative z-10 max-w-2xl mx-auto flex flex-col items-center gap-7 text-center">
+          <div className="inline-flex items-center gap-2 border border-indigo-400/25 bg-indigo-400/8 rounded-full px-4 py-1.5 text-xs font-medium text-indigo-300">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+            Join thousands of students already using FlowCard
+          </div>
+          <h2 className="text-4xl sm:text-5xl font-extrabold tracking-tight leading-tight">
+            Stop making flashcards.<br />
+            <span className="gradient-brand">Start remembering.</span>
+          </h2>
+          <p className="text-muted-foreground text-lg max-w-md">
+            Create your free account and generate your first deck in under 60 seconds.
+          </p>
+          <Link
+            href="/register"
+            className="flex items-center gap-2 px-8 py-4 rounded-xl gradient-btn text-base font-bold shadow-xl shadow-indigo-500/20 hover:scale-105 active:scale-95 transition-transform"
+          >
+            Create free account
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6" /></svg>
+          </Link>
+          <p className="text-xs text-muted-foreground/60">No credit card · No setup · No catch</p>
+        </Reveal>
+      </section>
+
+      {/* ── Footer ──────────────────────────────────────────────────────── */}
+      <footer className="border-t border-border/40 px-8 py-8">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center">
+              <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18" />
+              </svg>
+            </div>
+            <span className="text-sm font-bold gradient-brand">FlowCard</span>
+          </div>
+          <p className="text-xs text-muted-foreground/60">Built with AI — free for everyone, forever.</p>
+          <div className="flex gap-5 text-xs text-muted-foreground">
+            <Link href="/login" className="hover:text-foreground transition-colors">Log in</Link>
+            <Link href="/register" className="hover:text-foreground transition-colors">Sign up</Link>
+          </div>
+        </div>
       </footer>
+
+      {/* ── Keyframes ───────────────────────────────────────────────────── */}
+      <style>{`
+        @keyframes fade-in-up {
+          from { opacity: 0; transform: translateY(24px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fade-in-down {
+          from { opacity: 0; transform: translateY(-12px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes pulse-slow {
+          0%, 100% { opacity: 0.8; transform: translateX(-50%) scale(1); }
+          50%       { opacity: 1;   transform: translateX(-50%) scale(1.08); }
+        }
+        @keyframes float-slow {
+          0%, 100% { transform: translateY(0px); }
+          50%       { transform: translateY(-30px); }
+        }
+        @keyframes float-badge {
+          0%, 100% { transform: translateY(0px); }
+          50%       { transform: translateY(-6px); }
+        }
+      `}</style>
     </main>
   );
 }
