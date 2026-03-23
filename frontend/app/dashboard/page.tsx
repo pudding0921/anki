@@ -782,7 +782,10 @@ export default function DashboardPage() {
 
       <TutorialModal
         isOpen={tutorialOpen}
-        onClose={() => setTutorialOpen(false)}
+        onClose={() => {
+          localStorage.setItem("flowcard_tutorial_done", "1");
+          setTutorialOpen(false);
+        }}
       />
     </main>
   );
