@@ -25,6 +25,7 @@ class UserOut(BaseModel):
     id: int
     email: str
     created_at: datetime
+    subscription_status: str = "free"
 
     model_config = {"from_attributes": True}
 

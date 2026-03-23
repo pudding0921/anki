@@ -297,14 +297,32 @@ function ContactForm() {
 // ── Page ────────────────────────────────────────────────────────────────────
 export default function LandingPage() {
   const [scrolled, setScrolled] = useState(false);
+  const [showCanceledBanner, setShowCanceledBanner] = useState(false);
+
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 20);
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("subscription") === "canceled") {
+      setShowCanceledBanner(true);
+      window.history.replaceState({}, "", "/");
+    }
+  }, []);
+
   return (
     <main className="min-h-screen bg-background flex flex-col overflow-x-hidden">
+
+      {/* ── Subscription canceled banner ────────────────────────────────── */}
+      {showCanceledBanner && (
+        <div className="w-full bg-red-500/10 border-b border-red-500/20 px-6 py-3 flex items-center justify-between gap-4 z-50">
+          <p className="text-sm text-red-400">Your subscription has been canceled and your account access has been removed.</p>
+          <button onClick={() => setShowCanceledBanner(false)} className="text-red-400/60 hover:text-red-400 transition-colors text-lg leading-none">×</button>
+        </div>
+      )}
 
       {/* ── Navbar ──────────────────────────────────────────────────────── */}
       <nav
@@ -403,7 +421,7 @@ export default function LandingPage() {
             href="/login"
             className="flex items-center gap-2 px-7 py-3.5 rounded-xl border border-border text-sm font-semibold hover:bg-muted transition-colors"
           >
-            Sign in
+            Log in
           </Link>
         </div>
 

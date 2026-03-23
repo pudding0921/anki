@@ -145,3 +145,29 @@ def customer_portal(current_user: User = Depends(get_current_user)):
         return_url=f"{settings.FRONTEND_URL}/dashboard",
     )
     return {"url": session.url}
+
+
+@router.post("/cancel")
+def cancel_subscription(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Immediately cancel the active Stripe subscription and revoke account access."""
+    if not current_user.stripe_customer_id or current_user.subscription_status != "active":
+        raise HTTPException(status_code=400, detail="No active subscription to cancel")
+
+    try:
+        subscriptions = stripe.Subscription.list(
+            customer=current_user.stripe_customer_id,
+            status="active",
+            limit=1,
+        )
+        if subscriptions.data:
+            stripe.Subscription.cancel(subscriptions.data[0].id)
+    except stripe.error.StripeError as e:
+        raise HTTPException(status_code=400, detail=getattr(e, "user_message", str(e)))
+
+    current_user.subscription_status = "canceled"
+    current_user.subscription_plan = None
+    db.commit()
+    return {"ok": True}

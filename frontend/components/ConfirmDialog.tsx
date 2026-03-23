@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 interface ConfirmDialogProps {
   isOpen: boolean;
   itemName: string;
-  itemType: "deck" | "folder" | "card";
+  itemType: "deck" | "folder" | "card" | "subscription";
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -27,6 +27,37 @@ export function ConfirmDialog({
 
   if (!isOpen) return null;
 
+  // ── Subscription cancellation flow ──────────────────────────────────────
+  if (itemType === "subscription") {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        onClick={onCancel}
+      >
+        <div
+          className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm shadow-2xl flex flex-col gap-5 mx-4"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex flex-col gap-2">
+            <h2 className="font-semibold text-base text-red-400">Cancel subscription?</h2>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Your subscription will be <span className="font-medium text-foreground">cancelled immediately</span> and you will lose access to your account right away. This cannot be undone.
+            </p>
+          </div>
+          <div className="flex gap-3 justify-end">
+            <Button variant="outline" size="sm" onClick={onCancel}>
+              Keep subscription
+            </Button>
+            <Button variant="destructive" size="sm" onClick={onConfirm}>
+              Yes, cancel it
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Delete flow ──────────────────────────────────────────────────────────
   function handleFirstConfirm() {
     setStep(2);
   }

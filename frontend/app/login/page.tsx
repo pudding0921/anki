@@ -59,7 +59,7 @@ export default function LoginPage() {
             <span className="text-xl font-bold gradient-brand">FlowCard</span>
           </div>
           <h1 className="text-2xl font-bold text-foreground">Welcome back</h1>
-          <p className="text-sm text-muted-foreground mt-1.5">Sign in to your account</p>
+          <p className="text-sm text-muted-foreground mt-1.5">Log in to your account</p>
         </div>
 
         {/* Card */}
@@ -109,7 +109,7 @@ export default function LoginPage() {
               disabled={loading}
               className="mt-1 h-10 rounded-lg gradient-btn font-semibold text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {loading ? "Signing in…" : "Sign in"}
+              {loading ? "Logging in…" : "Log in"}
             </button>
           </form>
 
