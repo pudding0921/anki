@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards. Your job is to find the ONE keyword per bullet that a student must memorise. You will return that keyword as a short string. Nothing else.
+KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards. Your job is to find every keyword, key phrase, or vocabulary term per bullet that a student must memorise. You will return each as a short string. Nothing else.
 
 NEVER OCCLUDE THE SLIDE TITLE: {title}
 
@@ -31,35 +31,18 @@ Ask yourself: does the remaining text form a readable question that has exactly 
   FAIL ✗  "________________________________________" (nothing left)
            → you returned the entire bullet — student sees nothing
 
-If the remaining text is empty, meaningless, or less than 5 words, your term is TOO LONG. Pick a shorter word.
+If the remaining text is empty, meaningless, or less than 4 words, your term is TOO LONG. Shorten it.
 
 ══════════════════════════════════════════════════════
   ABSOLUTE HARD RULES
 ══════════════════════════════════════════════════════
-R1. MAXIMUM 2 WORDS. Single words are strongly preferred.
-R2. Your term MUST NOT contain ANY of these words — if it does, throw it out and pick again:
-      is  are  was  were  be  been  being
-      the  a  an
-      that  which  who  whom  what  where  when
-      does  do  did  not  no
-      to  of  in  on  at  by  for  with  from  into  onto
-      and  or  but  nor  so  yet
-      can  will  would  could  should  may  might  shall
-      this  these  those  it  its  they  their
-      use  uses  used  using
-      allow  allows  allowed  allowing
-      define  defines  defined  defining
-      create  creates  created  creating
-      include  includes  including  included
-      refer  refers  referred
-      store  stores  stored  storing
-      group  groups  grouped  grouping
-      allocate  allocates  allocated
-      access  accesses  accessed
-      call  calls  called  calling
+R1. MAXIMUM 4 WORDS per term. Shorter is better, but multi-word key phrases are allowed.
+R2. Your term MUST NOT be a full sentence or clause. Do NOT return terms containing ALL of:
+      subject + verb + object together (that is a sentence, not a term).
+      Avoid pure filler starts: "the a an that which does do not to of in and or but"
 R3. Never return the slide title or any individual word from it.
-R4. Never return a verb standing alone ("inhibits", "causes", "stores").
-R5. Return ONE term per bullet point. 2–5 terms total.
+R4. A specific verb that IS the vocabulary word is fine (e.g. "inhibits", "phosphorylates", "synthesizes"). Do NOT return generic verbs ("is", "uses", "creates", "includes").
+R5. Return ONE term per key concept in each bullet. Aim for 3–8 terms total — cover ALL important vocabulary, not just one per bullet.
 R6. NEVER return example variable names, parameter names, or constant names used as mere illustrations in code (e.g. MONDAY, TUESDAY, x, arr, i, Node, Day, myVar). These are placeholders — focus on the keyword, syntax element, or concept instead.
 
 ══════════════════════════════════════════════════════
@@ -134,24 +117,25 @@ CHECKLIST_SECTION = "\n━━ Study checklist — prioritize terms related to th
 
 VISION_PROMPT = (
     "You are building Anki image-occlusion flashcards from a slide image. "
-    "Find 2–4 single keywords to hide — NOT sentences, NOT phrases.\n\n"
+    "Find 3–8 keywords and key phrases to hide — cover ALL important vocabulary, terms, values, and named concepts.\n\n"
 
     "FILL-IN-THE-BLANK TEST (apply before every box you draw):\n"
-    "  Replace your chosen word with a blank. Does the rest of the sentence still form a readable question? "
+    "  Replace your chosen term with a blank. Does the rest of the sentence still form a readable question? "
     "If yes → good pick. If the sentence becomes empty or unreadable → your box is too large.\n\n"
 
     "HARD RULES:\n"
-    "  • 1–2 words maximum per box — single words strongly preferred\n"
+    "  • 1–4 words per box — single words preferred, but key phrases up to 4 words are allowed\n"
     "  • NEVER cover the slide title or heading (largest/boldest text)\n"
-    "  • NEVER cover a full sentence, clause, or any phrase containing:\n"
-    "    is are was the a an that which does not to of in and or use allow define create\n"
-    "  • ONLY cover: specific nouns, named concepts, constants, values\n\n"
+    "  • NEVER cover a full sentence or clause\n"
+    "  • Cover: specific nouns, named concepts, vocab terms, values, key phrases, specific verbs that ARE the vocabulary\n\n"
 
     "PATTERN EXAMPLES:\n"
     "  Bullet 'Structure: C++ construct that groups variables' → box over 'struct' only\n"
     "  Bullet 'declaration does not allocate memory' → box over 'memory' only\n"
     "  Bullet 'identifiers MONDAY TUESDAY are enumerators' → box over 'enumerators' only\n"
-    "  Bullet 'metformin inhibits glucose production' → box over 'metformin' only\n"
+    "  Bullet 'metformin inhibits glucose production' → box over 'metformin' AND 'hepatic glucose production'\n"
+    "  Bullet 'HbA1c > 6.5% confirms diabetes diagnosis' → box over 'HbA1c > 6.5%'\n"
+    "  Bullet 'photosynthesis occurs in the chloroplast' → box over 'photosynthesis' AND 'chloroplast'\n"
     "  Code 'enum Day { MONDAY, TUESDAY, FRIDAY };' → box over 'enum' only — NEVER the example names\n"
     "  Heading 'General Format:' → DO NOT box anything here\n\n"
     "CS/PROGRAMMING RULE: In code examples, NEVER box example variable names, parameter names, "
@@ -159,7 +143,7 @@ VISION_PROMPT = (
     "These are placeholders, not what students need to recall. Box the KEYWORD or CONCEPT instead.\n\n"
 
     "Bounding box: fraction of image (0.0–1.0). x,y = top-left. w,h = size. "
-    "Box must be tight around the single word only — not the whole line.\n"
+    "Box must be tight around the term only — not the whole line.\n"
     'Return ONLY valid JSON, no markdown:\n[{"label":"term","x":0.1,"y":0.2,"w":0.05,"h":0.03}]'
 )
 
@@ -218,11 +202,12 @@ EXAMPLES OF WRONG picks — never do these:
   ✗ "Example:" — heading, skip it
 
 HARD RULES:
-  • 1–2 words per box, single words strongly preferred
-  • NEVER box text containing: is are was the a an that which does do not to of in on and or but use allow define create include refer store group allocate
+  • 1–4 words per box — key phrases allowed, single words preferred
+  • NEVER box full sentences or clauses
+  • NEVER box pure filler: "is are was the a an that which does do not and or but"
   • NEVER box the title / heading
   • NEVER box example variable names, parameter names, or constant names used as illustrations in code (e.g. MONDAY, x, arr, Node, i, Day) — box the keyword or concept instead
-  • 2–4 boxes maximum
+  • 3–8 boxes — cover ALL important vocabulary and key phrases, not just one per bullet
 
 ═══════════════════════════════════════════
 STEP 3 — OUTPUT (strict JSON, no markdown)
