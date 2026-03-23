@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
 import { apiFetch, API_URL } from "@/lib/api";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 
@@ -27,22 +26,15 @@ interface Card {
 }
 
 const RATINGS = [
-  { label: "Again", quality: 0, color: "text-red-500" },
-  { label: "Hard", quality: 3, color: "text-orange-500" },
-  { label: "Good", quality: 4, color: "text-blue-500" },
-  { label: "Easy", quality: 5, color: "text-green-600" },
+  { label: "Again", quality: 0, bg: "bg-red-500/15 hover:bg-red-500/25 text-red-400 border-red-500/20", dot: "bg-red-400" },
+  { label: "Hard", quality: 3, bg: "bg-orange-500/15 hover:bg-orange-500/25 text-orange-400 border-orange-500/20", dot: "bg-orange-400" },
+  { label: "Good", quality: 4, bg: "bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 border-blue-500/20", dot: "bg-blue-400" },
+  { label: "Easy", quality: 5, bg: "bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border-emerald-500/20", dot: "bg-emerald-400" },
 ];
 
-function OcclusionCard({
-  card,
-  revealedCount,
-}: {
-  card: Card;
-  revealedCount: number;
-}) {
+function OcclusionCard({ card, revealedCount }: { card: Card; revealedCount: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
-
   const imgW = card.image_width ?? 800;
   const imgH = card.image_height ?? 600;
 
@@ -59,28 +51,35 @@ function OcclusionCard({
   }, [imgW]);
 
   return (
-    <div ref={containerRef} className="w-full max-w-lg">
-      <div
-        style={{ width: imgW * scale, height: imgH * scale, position: "relative" }}
-        className="mx-auto"
-      >
+    <div ref={containerRef} className="w-full max-w-2xl">
+      <div style={{ width: imgW * scale, height: imgH * scale, position: "relative" }} className="mx-auto rounded-2xl overflow-hidden shadow-2xl">
         <img
           src={`${API_URL}${card.image_path}`}
           alt="slide"
           style={{ width: imgW * scale, height: imgH * scale }}
-          className="rounded-xl border"
+          className="block"
         />
         {card.occlusion_zones.map((zone, i) => {
           const revealed = i < revealedCount;
           const active = i === revealedCount;
-
-          if (revealed) {
-            // Transparent — student sees the slide content underneath
-            return <div key={zone.id} style={{ position: "absolute" }} />;
-          }
-
+          // Revealed = transparent (student sees the answer underneath)
+          if (revealed) return (
+            <div
+              key={zone.id}
+              style={{
+                position: "absolute",
+                left: zone.x * scale,
+                top: zone.y * scale,
+                width: zone.width * scale,
+                height: zone.height * scale,
+                background: "rgba(134,239,172,0.15)",
+                border: "2px solid rgba(134,239,172,0.4)",
+                borderRadius: 6,
+              }}
+            />
+          );
+          // Active = the zone currently being tested — muted indigo
           if (active) {
-            // RED — this is the zone currently being tested
             return (
               <div
                 key={zone.id}
@@ -90,16 +89,15 @@ function OcclusionCard({
                   top: zone.y * scale,
                   width: zone.width * scale,
                   height: zone.height * scale,
-                  background: "#dc2626",
-                  border: "2px solid #b91c1c",
-                  borderRadius: 4,
-                  boxShadow: "0 0 0 3px rgba(220,38,38,0.3)",
+                  background: "#4f52a0",
+                  border: "2px solid #6366a8",
+                  borderRadius: 6,
+                  boxShadow: "0 0 0 2px rgba(99,102,180,0.25), 0 4px 12px rgba(99,102,180,0.3)",
                 }}
               />
             );
           }
-
-          // Upcoming — solid dark blue, fully covered
+          // Upcoming = fully opaque muted dark box
           return (
             <div
               key={zone.id}
@@ -109,9 +107,9 @@ function OcclusionCard({
                 top: zone.y * scale,
                 width: zone.width * scale,
                 height: zone.height * scale,
-                background: "#1e3a5f",
-                border: "2px solid #1e40af",
-                borderRadius: 4,
+                background: "#2a2840",
+                border: "2px solid #3d3a60",
+                borderRadius: 6,
               }}
             />
           );
@@ -123,7 +121,6 @@ function OcclusionCard({
 
 function StudyContent() {
   useAuthGuard();
-
   const searchParams = useSearchParams();
   const router = useRouter();
   const deckId = searchParams.get("deckId");
@@ -133,29 +130,15 @@ function StudyContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [index, setIndex] = useState(0);
-
-  // For plain flashcards
   const [flipped, setFlipped] = useState(false);
-  // For occlusion cards: how many zones have been revealed
   const [revealedCount, setRevealedCount] = useState(0);
-
   const [reviewed, setReviewed] = useState(false);
 
   useEffect(() => {
-    if (!deckId) {
-      setError("No deck selected. Go back to your dashboard.");
-      setLoading(false);
-      return;
-    }
+    if (!deckId) { setError("No deck selected."); setLoading(false); return; }
     apiFetch(`/api/decks/${deckId}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Deck not found");
-        return res.json();
-      })
-      .then((data) => {
-        setDeckName(data.name);
-        setCards(data.cards);
-      })
+      .then((res) => { if (!res.ok) throw new Error("Deck not found"); return res.json(); })
+      .then((data) => { setDeckName(data.name); setCards(data.cards); })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, [deckId]);
@@ -165,38 +148,40 @@ function StudyContent() {
   const totalZones = isOcclusion ? (card?.occlusion_zones?.length ?? 0) : 0;
   const allRevealed = isOcclusion ? revealedCount >= totalZones : flipped;
 
-  // Spacebar handler
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (e.code !== "Space") return;
-      e.preventDefault();
-      if (isOcclusion) {
-        if (revealedCount < totalZones) {
-          setRevealedCount((r) => r + 1);
+      // Don't fire when typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (isOcclusion) {
+          if (revealedCount < totalZones) setRevealedCount((r) => r + 1);
+        } else {
+          setFlipped((f) => !f);
         }
-      } else {
-        setFlipped((f) => !f);
+        return;
+      }
+
+      // Arrow keys and WASD for navigation
+      if (e.code === "ArrowRight" || e.code === "KeyD") {
+        e.preventDefault();
+        if (index < cards.length - 1) { resetCard(); setIndex((i) => i + 1); }
+        return;
+      }
+      if (e.code === "ArrowLeft" || e.code === "KeyA") {
+        e.preventDefault();
+        if (index > 0) { resetCard(); setIndex((i) => i - 1); }
+        return;
       }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [isOcclusion, revealedCount, totalZones]);
+  }, [isOcclusion, revealedCount, totalZones, index, cards.length]);
 
-  function resetCard() {
-    setFlipped(false);
-    setRevealedCount(0);
-    setReviewed(false);
-  }
-
-  function next() {
-    resetCard();
-    setIndex((i) => Math.min(i + 1, cards.length - 1));
-  }
-
-  function prev() {
-    resetCard();
-    setIndex((i) => Math.max(i - 1, 0));
-  }
+  function resetCard() { setFlipped(false); setRevealedCount(0); setReviewed(false); }
+  function next() { resetCard(); setIndex((i) => Math.min(i + 1, cards.length - 1)); }
+  function prev() { resetCard(); setIndex((i) => Math.max(i - 1, 0)); }
 
   async function submitReview(quality: number) {
     setReviewed(true);
@@ -209,130 +194,162 @@ function StudyContent() {
 
   if (loading) {
     return (
-      <main className="min-h-screen flex items-center justify-center">
-        <p className="text-muted-foreground text-sm">Loading deck…</p>
+      <main className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-muted-foreground">Loading deck…</p>
+        </div>
       </main>
     );
   }
 
   if (error || cards.length === 0) {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center gap-4 px-4">
-        <p className="text-muted-foreground text-center">
-          {error || "This deck has no cards yet."}
-        </p>
-        <Button onClick={() => router.push("/dashboard")}>Back to dashboard</Button>
+      <main className="min-h-screen bg-background flex flex-col items-center justify-center gap-4 px-4">
+        <p className="text-muted-foreground text-center">{error || "This deck has no cards yet."}</p>
+        <button
+          onClick={() => router.push("/dashboard")}
+          className="px-4 py-2 rounded-lg border border-border hover:bg-muted transition-colors text-sm font-medium"
+        >
+          Back to dashboard
+        </button>
       </main>
     );
   }
 
+  const progress = ((index + 1) / cards.length) * 100;
+
   return (
     <main className="min-h-screen bg-background flex flex-col">
-      <nav className="flex items-center justify-between px-8 py-5 border-b">
+      {/* Nav */}
+      <nav className="glass border-b border-border/60 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
         <button
-          className="text-sm text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => router.push("/dashboard")}
         >
-          ← Dashboard
+          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6" /></svg>
+          Dashboard
         </button>
-        <span className="font-semibold truncate max-w-xs">{deckName}</span>
-        <span className="text-sm text-muted-foreground tabular-nums">
-          {index + 1} / {cards.length}
-        </span>
+        <span className="font-semibold text-sm truncate max-w-xs">{deckName}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground tabular-nums font-medium">
+            {index + 1} <span className="text-muted-foreground/40">/</span> {cards.length}
+          </span>
+        </div>
       </nav>
 
-      <div className="flex flex-col items-center justify-center flex-1 gap-8 px-4 py-8">
-        {/* Progress bar */}
-        <div className="w-full max-w-lg h-1.5 bg-muted rounded-full overflow-hidden">
-          <div
-            className="h-full bg-primary transition-all duration-300"
-            style={{ width: `${((index + 1) / cards.length) * 100}%` }}
-          />
-        </div>
+      {/* Progress bar */}
+      <div className="h-0.5 bg-muted w-full">
+        <div
+          className="h-full bg-gradient-to-r from-indigo-400/80 to-violet-400/80 transition-all duration-500"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
 
+      <div className="flex flex-col items-center justify-center flex-1 gap-8 px-4 py-10">
+        {/* Occlusion card */}
         {isOcclusion ? (
           <>
             <OcclusionCard card={card} revealedCount={revealedCount} />
 
             {!allRevealed ? (
-              <div className="flex flex-col items-center gap-2">
+              <div className="flex flex-col items-center gap-3">
                 <p className="text-xs text-muted-foreground">
                   {revealedCount === 0
-                    ? `${totalZones} term${totalZones !== 1 ? "s" : ""} hidden — press Space to reveal`
-                    : `${totalZones - revealedCount} remaining — press Space to reveal next`}
+                    ? `${totalZones} term${totalZones !== 1 ? "s" : ""} hidden`
+                    : `${totalZones - revealedCount} term${totalZones - revealedCount !== 1 ? "s" : ""} remaining`}
+                  {" · Space to reveal · ← → to navigate"}
                 </p>
-                <Button variant="outline" onClick={() => setRevealedCount((r) => r + 1)}>
+                <button
+                  onClick={() => setRevealedCount((r) => r + 1)}
+                  className="px-5 py-2 rounded-xl border border-indigo-400/20 bg-indigo-400/8 text-indigo-300 hover:bg-indigo-400/15 text-sm font-medium transition-colors"
+                >
                   Reveal next
-                </Button>
+                </button>
               </div>
             ) : (
-              <p className="text-xs text-muted-foreground">All terms revealed</p>
+              <p className="text-xs text-emerald-400 font-medium">✓ All terms revealed</p>
             )}
           </>
         ) : (
+          /* Text flashcard */
           <>
             <div
-              className="w-full max-w-lg min-h-52 border rounded-2xl p-8 flex flex-col items-center justify-center text-center cursor-pointer select-none transition-all hover:shadow-md gap-3"
+              className="w-full max-w-lg cursor-pointer select-none"
               onClick={() => setFlipped((f) => !f)}
             >
-              <span className="text-xs text-muted-foreground uppercase tracking-widest">
-                {flipped ? "Answer" : "Question"}
-              </span>
-              <p className="text-lg font-medium leading-relaxed">
-                {flipped ? card.back : card.front}
-              </p>
+              <div className={`relative min-h-52 glass rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-all duration-300 hover:border-indigo-500/30 hover:shadow-xl hover:shadow-indigo-500/10 ${flipped ? "border-emerald-500/20" : ""}`}>
+                <span className={`text-[10px] font-bold uppercase tracking-[0.2em] mb-4 ${flipped ? "text-emerald-400" : "text-indigo-400"}`}>
+                  {flipped ? "Answer" : "Question"}
+                </span>
+                <p className="text-lg font-medium leading-relaxed">
+                  {flipped ? card.back : card.front}
+                </p>
+                {!flipped && (
+                  <p className="text-xs text-muted-foreground/50 mt-6">Space to flip · ← → to navigate</p>
+                )}
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Press Space or click to flip
-            </p>
           </>
         )}
 
-        {/* SM-2 ratings — shown when all revealed */}
+        {/* Rating buttons */}
         {allRevealed && (
-          <div className="flex flex-col items-center gap-3">
-            <p className="text-xs text-muted-foreground font-medium uppercase tracking-widest">
+          <div className="flex flex-col items-center gap-4 w-full max-w-sm">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-widest">
               How did it go?
             </p>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-4 gap-2 w-full">
               {RATINGS.map((r) => (
                 <button
                   key={r.quality}
                   disabled={reviewed}
                   onClick={() => submitReview(r.quality)}
-                  className={`px-4 py-2 rounded-lg border text-sm font-medium transition-opacity ${r.color} ${
-                    reviewed ? "opacity-40 cursor-not-allowed" : "hover:bg-muted"
+                  className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border text-sm font-semibold transition-all ${r.bg} ${
+                    reviewed ? "opacity-40 cursor-not-allowed" : "hover:scale-105 active:scale-95"
                   }`}
                 >
+                  <div className={`w-2 h-2 rounded-full ${r.dot}`} />
                   {r.label}
                 </button>
               ))}
             </div>
-            {reviewed && <p className="text-xs text-green-600">Saved!</p>}
+            {reviewed && (
+              <p className="text-xs text-emerald-400 font-medium">Saved ✓</p>
+            )}
           </div>
         )}
 
-        <div className="flex gap-3">
-          <Button variant="outline" onClick={prev} disabled={index === 0}>
-            Back
-          </Button>
-          <Button onClick={next} disabled={index === cards.length - 1}>
-            Next
-          </Button>
-        </div>
-
-        {index === cards.length - 1 && allRevealed && (
-          <p className="text-sm text-muted-foreground">
-            You&apos;ve reached the end!{" "}
+        {/* Nav buttons */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={prev}
+            disabled={index === 0}
+            className="px-4 py-2 rounded-xl border border-border hover:bg-muted transition-colors text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            ← Back
+          </button>
+          {index === cards.length - 1 && allRevealed ? (
             <button
-              className="underline hover:text-foreground"
-              onClick={() => {
-                setIndex(0);
-                resetCard();
-              }}
+              onClick={() => { setIndex(0); resetCard(); }}
+              className="px-4 py-2 rounded-xl gradient-btn text-sm font-semibold"
             >
               Start over
             </button>
+          ) : (
+            <button
+              onClick={next}
+              disabled={index === cards.length - 1}
+              className="px-4 py-2 rounded-xl gradient-btn text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next →
+            </button>
+          )}
+        </div>
+
+        {index === cards.length - 1 && allRevealed && (
+          <p className="text-sm text-muted-foreground text-center">
+            🎉 You&apos;ve reached the end of the deck!
           </p>
         )}
       </div>
@@ -342,13 +359,11 @@ function StudyContent() {
 
 export default function StudyPage() {
   return (
-    <Suspense
-      fallback={
-        <main className="min-h-screen flex items-center justify-center">
-          <p className="text-muted-foreground text-sm">Loading…</p>
-        </main>
-      }
-    >
+    <Suspense fallback={
+      <main className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </main>
+    }>
       <StudyContent />
     </Suspense>
   );

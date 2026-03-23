@@ -5,4 +5,4 @@ router = APIRouter()
 
 @router.get("/health")
 def health_check():
-    return {"status": "ok", "service": "ankiai-backend"}
+    return {"status": "ok", "service": "flowcard-backend"}

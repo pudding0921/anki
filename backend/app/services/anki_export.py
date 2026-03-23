@@ -40,7 +40,7 @@ def _occlusion_html(
 
     The image uses position:absolute inside a fixed-size container so Anki's
     default `img { max-width:100% }` CSS cannot shrink it and misalign overlays.
-    The .ankiai-img class (defined in the model CSS) enforces the correct size.
+    The .flowcard-img class (defined in the model CSS) enforces the correct size.
     """
     scale = _RENDER_W / max(card_w, 1)
     render_h = int(card_h * scale)
@@ -51,8 +51,8 @@ def _occlusion_html(
         f'<div style="position:relative;display:inline-block;'
         f'width:{_RENDER_W}px;height:{render_h}px;overflow:hidden;line-height:0;">',
         # Image is position:absolute so the container height drives layout, not the image.
-        # .ankiai-img class sets max-width:none !important to defeat Anki's default CSS.
-        f'<img src="{img_filename}" class="ankiai-img" '
+        # .flowcard-img class sets max-width:none !important to defeat Anki's default CSS.
+        f'<img src="{img_filename}" class="flowcard-img" '
         f'width="{_RENDER_W}" height="{render_h}" alt="slide">',
     ]
 
@@ -91,7 +91,7 @@ def _occlusion_html(
 
 _MODEL = genanki.Model(
     _MODEL_ID,
-    "AnkiAI Basic",
+    "FlowCard Basic",
     fields=[
         {"name": "Front"},
         {"name": "Back"},
@@ -108,7 +108,7 @@ _MODEL = genanki.Model(
         "background: #fff; padding: 10px; } "
         # Prevent Anki's default `img { max-width:100% }` from shrinking our occlusion
         # images — which would shift the overlay boxes off the wrong positions.
-        ".ankiai-img { position:absolute !important; top:0 !important; left:0 !important; "
+        ".flowcard-img { position:absolute !important; top:0 !important; left:0 !important; "
         "width:100% !important; height:100% !important; "
         "max-width:none !important; object-fit:fill !important; border-radius:6px; }"
     ),

@@ -1,0 +1,26 @@
+{
+  "name": "anki",
+  "version": "1.0.0",
+  "description": "AI-powered flashcard generator. Upload lecture slides (PDF or image) and the AI automatically creates Anki-ready occlusion and Q&A flashcards.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail false --names \"backend,frontend\" --prefix-colors \"cyan,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && (python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 || py -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 || python3 -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000)",
+    "dev:frontend": "cd frontend && npm run dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pudding0921/anki.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/pudding0921/anki/issues"
+  },
+  "homepage": "https://github.com/pudding0921/anki#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

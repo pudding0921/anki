@@ -16,88 +16,228 @@ logger = logging.getLogger(__name__)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-KEY_TERMS_PROMPT = """You are an elite medical education specialist creating high-yield Anki flashcards. Your job is to identify the EXACT words and phrases a student must recall on an exam — nothing more, nothing less.
+KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards. Your job is to find the ONE keyword per bullet that a student must memorise. You will return that keyword as a short string. Nothing else.
 
-SLIDE TITLE — ABSOLUTE NO-FLY ZONE (never occlude any word from this): {title}
+NEVER OCCLUDE THE SLIDE TITLE: {title}
 
-━━ NEVER occlude ━━
-• ANY word from the slide title above (this is a hard rule)
-• Slide numbers, page numbers, dates, years
-• Professor names, author names, institution names
-• Generic verbs and connectors: "is", "are", "can", "may", "include", "such as", "refers to", "defined as", "e.g.", "i.e."
-• Articles and prepositions: "the", "a", "an", "of", "in", "by", "via", "with"
-• Words under 4 characters unless they are a critical acronym
+══════════════════════════════════════════════════════
+  THE FILL-IN-THE-BLANK TEST  (apply this to every term before returning it)
+══════════════════════════════════════════════════════
+Replace your chosen term with a blank in the original sentence.
+Ask yourself: does the remaining text form a readable question that has exactly ONE missing answer?
 
-━━ ALWAYS occlude — high-yield targets ━━
-• Drug names (generic names: e.g. "metformin", "atorvastatin", "amoxicillin")
-• Specific mechanisms of action (e.g. "inhibits HMG-CoA reductase", "blocks Na+ channels")
-• Pathophysiology terms (e.g. "insulin resistance", "oxidative phosphorylation")
-• Disease names and diagnostic criteria (e.g. "Cushing syndrome", "HbA1c > 6.5%")
-• Anatomical structures with clinical significance
-• Lab values, thresholds, and units (e.g. "< 120 mmHg", "eGFR < 60")
-• Named signs, syndromes, eponyms (e.g. "Virchow's triad", "Battle's sign")
-• Specific percentages or statistics if clinically meaningful
-• The single defining term in any definition or cause-effect statement
+  PASS ✓  "A ________ is a C++ construct that groups variables together."
+           → you returned "struct" — student knows what to recall
+  FAIL ✗  "________________________________________" (nothing left)
+           → you returned the entire bullet — student sees nothing
 
-━━ Quantity ━━
-• 2–5 terms maximum — quality over quantity
-• For bullet-point slides: pick 1 high-yield term per bullet, skip bullets with no testable content
-• If the slide has fewer than 3 genuinely testable terms, return only those — never pad
+If the remaining text is empty, meaningless, or less than 5 words, your term is TOO LONG. Pick a shorter word.
+
+══════════════════════════════════════════════════════
+  ABSOLUTE HARD RULES
+══════════════════════════════════════════════════════
+R1. MAXIMUM 2 WORDS. Single words are strongly preferred.
+R2. Your term MUST NOT contain ANY of these words — if it does, throw it out and pick again:
+      is  are  was  were  be  been  being
+      the  a  an
+      that  which  who  whom  what  where  when
+      does  do  did  not  no
+      to  of  in  on  at  by  for  with  from  into  onto
+      and  or  but  nor  so  yet
+      can  will  would  could  should  may  might  shall
+      this  these  those  it  its  they  their
+      use  uses  used  using
+      allow  allows  allowed  allowing
+      define  defines  defined  defining
+      create  creates  created  creating
+      include  includes  including  included
+      refer  refers  referred
+      store  stores  stored  storing
+      group  groups  grouped  grouping
+      allocate  allocates  allocated
+      access  accesses  accessed
+      call  calls  called  calling
+R3. Never return the slide title or any individual word from it.
+R4. Never return a verb standing alone ("inhibits", "causes", "stores").
+R5. Return ONE term per bullet point. 2–5 terms total.
+R6. NEVER return example variable names, parameter names, or constant names used as mere illustrations in code (e.g. MONDAY, TUESDAY, x, arr, i, Node, Day, myVar). These are placeholders — focus on the keyword, syntax element, or concept instead.
+
+══════════════════════════════════════════════════════
+  PATTERN GUIDE — how to handle every bullet type
+══════════════════════════════════════════════════════
+
+PATTERN 1 — "Term: full definition after the colon"
+  Bullet:   "Structure: C++ construct that allows multiple variables to be grouped together"
+  ✓ Return: "struct"           ← the term before the colon (or its canonical name)
+  ✗ Never:  "C++ construct that allows multiple variables to be grouped together"
+  ✗ Never:  "C++ construct"
+  ✗ Never:  "grouped together"
+
+PATTERN 2 — "Subject verb/does KEYWORD or has KEYWORD"
+  Bullet:   "struct declaration does not allocate memory or create variables"
+  ✓ Return: "memory"           ← the key noun that is the answer
+  ✗ Never:  "struct declaration does not allocate memory or create variables"
+  ✗ Never:  "does not allocate"
+  ✗ Never:  "allocate memory"
+
+PATTERN 3 — "To do X, use Y as Z"
+  Bullet:   "To define variables, use structure tag as type name"
+  ✓ Return: "structure tag"    ← the specific technique/term being taught
+  ✗ Never:  "To define variables, use structure tag as type name"
+  ✗ Never:  "use structure tag as type name"
+  ✗ Never:  "type name"        (too vague)
+
+PATTERN 4 — Code examples with enum / constant / variable names
+  Bullet:   "enum Day {{ MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY }};"
+  ✓ Return: "enum"             ← the language keyword being taught
+  ✗ Never:  "MONDAY", "TUESDAY", "WEDNESDAY", "Day", etc.
+  WHY: In CS/programming slides, the specific names used in examples (MONDAY, x, arr, Node)
+       are just illustrative placeholders — a student does NOT need to recall them.
+       Always hide the KEYWORD or SYNTAX ELEMENT, never the example names.
+
+PATTERN 5 — "Items are called CONCEPT"
+  Bullet:   "The identifiers MONDAY, TUESDAY are enumerators that represent values"
+  ✓ Return: "enumerators"      ← the concept name being defined
+  ✗ Never:  "MONDAY", "TUESDAY", "identifiers MONDAY"
+  WHY: The example identifiers (MONDAY etc.) are not the answer — "enumerators" is.
+
+PATTERN 6 — Medical / science "drug/gene MECHANISM"
+  Bullet:   "metformin inhibits hepatic glucose production"
+  ✓ Return: "metformin"        ← the specific agent
+  ✗ Never:  "inhibits hepatic glucose production"
+  ✗ Never:  "metformin inhibits"
+
+PATTERN 7 — Threshold / value
+  Bullet:   "HbA1c > 6.5% confirms a diagnosis of diabetes"
+  ✓ Return: "HbA1c > 6.5%"    ← the specific value (this is short enough)
+  ✗ Never:  "confirms a diagnosis of diabetes"
+
+PATTERN 8 — Generic heading with no testable answer
+  Bullet:   "General Format:"  or  "Example:"  or  "Note:"
+  ✓ Return: nothing — skip this bullet entirely, it has no answer to hide
+
+══════════════════════════════════════════════════════
+  QUICK SELF-CHECK before returning each term
+══════════════════════════════════════════════════════
+  □ Is it 1–2 words?                                   must be YES
+  □ Does it contain any word from the banned list R2?  must be NO
+  □ If I blank it out, does a readable question remain? must be YES
+  □ Is it specific and testable (not vague like "format" or "type")? must be YES
 {checklist_section}
-Slide body text (title already removed):
+════ SLIDE BODY TEXT (title already removed) ════
 {body_text}
 
-Return ONLY a valid JSON array of exact strings copied from the text — no markdown, no explanation:
-["term1", "multi word phrase"]"""
+Return ONLY a valid JSON array of short strings. No markdown, no explanation, no extra text:
+["term1", "term2"]"""
 
 CHECKLIST_SECTION = "\n━━ Study checklist — prioritize terms related to these topics ━━\n{checklist}\n"
 
 VISION_PROMPT = (
-    "You are an elite medical education specialist analyzing a study slide or diagram. "
-    "Identify the 2–6 most high-yield terms a student MUST memorize for exams.\n\n"
+    "You are building Anki image-occlusion flashcards from a slide image. "
+    "Find 2–4 single keywords to hide — NOT sentences, NOT phrases.\n\n"
+
+    "FILL-IN-THE-BLANK TEST (apply before every box you draw):\n"
+    "  Replace your chosen word with a blank. Does the rest of the sentence still form a readable question? "
+    "If yes → good pick. If the sentence becomes empty or unreadable → your box is too large.\n\n"
+
     "HARD RULES:\n"
-    "- SKIP the slide title/heading entirely — never occlude it\n"
-    "- SKIP person names, institution names, generic verbs, filler phrases\n"
-    "- PICK: drug names, anatomical labels, pathology terms, mechanism keywords, "
-    "diagram annotations, defined vocabulary with exam relevance\n\n"
-    "For each term, give its bounding box as a fraction (0.0–1.0) of image width/height. "
-    "x,y = top-left corner; w,h = size of the box.\n"
-    'Return ONLY valid JSON — no markdown:\n[{"label":"term","x":0.1,"y":0.2,"w":0.2,"h":0.04}]'
+    "  • 1–2 words maximum per box — single words strongly preferred\n"
+    "  • NEVER cover the slide title or heading (largest/boldest text)\n"
+    "  • NEVER cover a full sentence, clause, or any phrase containing:\n"
+    "    is are was the a an that which does not to of in and or use allow define create\n"
+    "  • ONLY cover: specific nouns, named concepts, constants, values\n\n"
+
+    "PATTERN EXAMPLES:\n"
+    "  Bullet 'Structure: C++ construct that groups variables' → box over 'struct' only\n"
+    "  Bullet 'declaration does not allocate memory' → box over 'memory' only\n"
+    "  Bullet 'identifiers MONDAY TUESDAY are enumerators' → box over 'enumerators' only\n"
+    "  Bullet 'metformin inhibits glucose production' → box over 'metformin' only\n"
+    "  Code 'enum Day { MONDAY, TUESDAY, FRIDAY };' → box over 'enum' only — NEVER the example names\n"
+    "  Heading 'General Format:' → DO NOT box anything here\n\n"
+    "CS/PROGRAMMING RULE: In code examples, NEVER box example variable names, parameter names, "
+    "constant names, or type names used as mere illustrations (e.g. MONDAY, x, arr, Node, Day). "
+    "These are placeholders, not what students need to recall. Box the KEYWORD or CONCEPT instead.\n\n"
+
+    "Bounding box: fraction of image (0.0–1.0). x,y = top-left. w,h = size. "
+    "Box must be tight around the single word only — not the whole line.\n"
+    'Return ONLY valid JSON, no markdown:\n[{"label":"term","x":0.1,"y":0.2,"w":0.05,"h":0.03}]'
 )
 
-ANKIFLOW_VISION_PROMPT = """You are an elite Medical Education AI and Flashcard Specialist analyzing a study slide image.
+ANKIFLOW_VISION_PROMPT = """You are building Anki image-occlusion flashcards from a study slide image.
 
-### STEP 1 — IDENTIFY THE TITLE (ABSOLUTE NO-FLY ZONE)
-Scan for the PRIMARY TOPIC: the largest, boldest, or most prominent text on the slide.
-Store it as master_topic. You must NEVER place any occlusion box over any word in master_topic.
-The student always needs to see the topic to answer the card correctly.
+═══════════════════════════════════════════
+STEP 1 — IDENTIFY THE TITLE (NEVER BOX THIS)
+═══════════════════════════════════════════
+The title is the largest or boldest text, usually at the top. Record it as master_topic.
+Do NOT place any occlusion box on the title or any word in it.
 
-### STEP 2 — IDENTIFY HIGH-YIELD OCCLUSION TARGETS
-Look for:
-• Drug names and drug classes
-• Mechanisms of action and pathophysiology terms
-• Anatomical structure labels and diagram annotations
-• Disease names, syndromes, diagnostic criteria
-• Defined vocabulary terms that would appear on an exam
-• Specific values, thresholds, or units with clinical significance
-• Named signs, eponyms, or classification systems
+═══════════════════════════════════════════
+STEP 2 — FIND KEYWORDS TO BOX
+═══════════════════════════════════════════
+You are looking for 2–4 single keywords — the ANSWERS a student must recall.
+Each box covers exactly ONE word (or at most two words for named concepts).
 
-Skip entirely:
-• Any text that is part of the title / master_topic
-• Person names, author names, institutional names
-• Generic connecting words, articles, prepositions
-• Decorative text, slide numbers, footnotes
+FILL-IN-THE-BLANK TEST — apply this before drawing every box:
+  Take the bullet text. Replace your chosen word with a blank.
+  Does the remaining text form a clear, readable question?
+    YES → correct pick.
+    NO (sentence is now empty or has fewer than 5 words left) → your box is too big. Pick a shorter word.
 
-### STEP 3 — OUTPUT (STRICT JSON ONLY — zero markdown, zero explanation)
-One card per term. Bounding box uses [ymin, xmin, ymax, xmax] on a 0–1000 scale.
+EXAMPLES OF CORRECT picks:
+  Bullet "Structure: C++ construct that allows variables to be grouped together"
+    → box over "struct" only
+    → remaining text: "________: C++ construct that allows variables to be grouped together" ✓
+
+  Bullet "struct declaration does not allocate memory or create variables"
+    → box over "memory" only
+    → remaining text: "struct declaration does not allocate _______ or create variables" ✓
+
+  Bullet "To define variables, use structure tag as type name"
+    → box over "structure tag"
+    → remaining text: "To define variables, use _____________ as type name" ✓
+
+  Bullet "The identifiers MONDAY, TUESDAY, WEDNESDAY are enumerators"
+    → box over "enumerators" only
+    → remaining text: "The identifiers MONDAY, TUESDAY, WEDNESDAY are ___________" ✓
+
+  Bullet "metformin inhibits hepatic glucose production"
+    → box over "metformin" only
+    → remaining text: "__________ inhibits hepatic glucose production" ✓
+
+  Enum code "enum Day { MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY };"
+    → box over "enum" only (the keyword being taught)
+    → NEVER box MONDAY, TUESDAY, Day, or any other example names — they are illustrative only
+
+EXAMPLES OF WRONG picks — never do these:
+  ✗ "C++ construct that allows multiple variables to be grouped together" — entire definition, 9 words
+  ✗ "struct declaration does not allocate memory" — whole sentence
+  ✗ "does not allocate memory or create variables" — verb phrase
+  ✗ "To define variables use structure tag as type name" — instruction sentence
+  ✗ "variables to be grouped together" — phrase with filler words
+  ✗ "General Format:" — heading with no answer to test
+  ✗ "Example:" — heading, skip it
+
+HARD RULES:
+  • 1–2 words per box, single words strongly preferred
+  • NEVER box text containing: is are was the a an that which does do not to of in on and or but use allow define create include refer store group allocate
+  • NEVER box the title / heading
+  • NEVER box example variable names, parameter names, or constant names used as illustrations in code (e.g. MONDAY, x, arr, Node, i, Day) — box the keyword or concept instead
+  • 2–4 boxes maximum
+
+═══════════════════════════════════════════
+STEP 3 — OUTPUT (strict JSON, no markdown)
+═══════════════════════════════════════════
+Bounding box: [ymin, xmin, ymax, xmax] on 0–1000 scale.
+Box must be TIGHT around the single keyword — not the whole line.
+
 {
-  "master_topic": "string",
+  "master_topic": "slide title here",
   "cards": [
     {
       "type": "IMAGE_OCCLUSION",
-      "occlusion_label": "exact term as it appears on the slide",
+      "occlusion_label": "exact single keyword",
       "bounding_box": [ymin, xmin, ymax, xmax],
-      "context_hint": "one-phrase description of surrounding context"
+      "context_hint": "one phrase of context"
     }
   ]
 }"""
@@ -148,15 +288,176 @@ def _extract_title_info(page) -> tuple:
     return title_str, title_word_set, title_max_y
 
 
-def _term_overlaps_title(term: str, title_words: Set[str]) -> bool:
-    """True if ALL words in the term are title words (would cover the title)."""
-    if not title_words:
+_FILLER_WORDS = {
+    "is", "are", "was", "were", "be", "been", "being",
+    "the", "a", "an", "of", "in", "by", "via", "with", "from",
+    "that", "which", "this", "these", "those", "for", "and", "or",
+    "can", "may", "will", "would", "could", "should",
+    "such", "as", "e.g", "i.e", "etc", "also", "to", "at", "on",
+    "include", "includes", "including",
+}
+
+_FILLER_VERBS = {
+    "inhibits", "inhibit", "causes", "cause", "leads", "results",
+    "affects", "increases", "decreases", "produces",
+    "refers", "defined", "called", "known", "used", "found",
+}
+
+# Common English words used as illustrative example names in code/enum contexts.
+# These are NEVER the concept a student needs to recall — block them at the code level
+# regardless of what the LLM returns.
+_EXAMPLE_IDENTIFIER_NAMES = {
+    # Days of the week
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    # Months
+    "january", "february", "march", "april", "june", "july", "august",
+    "september", "october", "november", "december",
+    # Seasons / nature
+    "spring", "summer", "fall", "autumn", "winter",
+    # Cardinal directions
+    "north", "south", "east", "west",
+    # Colors
+    "red", "green", "blue", "yellow", "orange", "purple", "pink",
+    "white", "black", "brown", "gray", "grey", "cyan", "magenta",
+    # Generic placeholder names
+    "foo", "bar", "baz", "hello", "world", "example", "sample", "test", "demo",
+    # Common enum illustrative values
+    "up", "down", "left", "right",
+    "small", "medium", "large", "tiny", "huge",
+    "low", "high",
+    "yes", "no",
+    "open", "closed", "pending", "active", "inactive",
+    "male", "female",
+    "first", "second", "third",
+    "alpha", "beta", "gamma", "delta",
+    "start", "stop", "begin", "end",
+    "on", "off",
+    "plus", "minus",
+    "circle", "square", "triangle", "rectangle",
+}
+
+# Any term containing one of these words is a sentence fragment — reject it
+_SENTENCE_FRAGMENT_WORDS = {
+    "is", "are", "was", "were", "be", "been", "being",
+    "the", "a", "an",
+    "that", "which", "who", "whom",
+    "does", "do", "did", "not",
+    "to", "of", "in", "on", "at", "by", "for", "with", "from",
+    "and", "or", "but",
+    "can", "will", "would", "could", "should", "may", "might",
+    "this", "these", "those", "it", "its",
+    "use", "uses", "used", "using",
+    "allow", "allows", "allowed",
+    "define", "defines", "defined",
+    "create", "creates", "created",
+    "include", "includes", "including",
+    "refer", "refers", "referred",
+    "allocate", "store", "stores", "stored",
+    "group", "groups", "grouped",
+}
+
+
+def _term_overlaps_title(term: str, title_words: Set[str], title_str: str = "") -> bool:
+    """True if the term overlaps significantly with the slide title."""
+    if not title_words and not title_str:
         return False
-    term_words = {t.lower().strip(".,;:!?()'\"") for t in term.split() if len(t) > 1}
-    return bool(term_words) and term_words.issubset(title_words)
+
+    # Direct substring match (case-insensitive)
+    if title_str and term.lower() in title_str.lower():
+        return True
+
+    term_words = [t.lower().strip(".,;:!?()'\"") for t in term.split() if len(t) > 1]
+    if not term_words:
+        return False
+
+    # If majority of term words are title words, reject
+    matching = sum(1 for w in term_words if w in title_words)
+    return matching >= max(1, len(term_words) * 0.6)
+
+
+def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) -> List[str]:
+    """Hard rules applied after LLM output to reject bad terms.
+    Any term containing a sentence-fragment word is unconditionally rejected.
+    Hard cap: 2 words maximum."""
+    filtered = []
+    for term in terms:
+        words = term.split()
+        clean_words = [w.lower().strip(".,;:!?()'\"[]{}") for w in words]
+
+        # Hard cap: 2 words max
+        if len(words) > 2:
+            logger.info(f"Rejected (>2 words): {repr(term)}")
+            continue
+
+        # Reject if ANY word is a sentence-fragment indicator
+        if any(w in _SENTENCE_FRAGMENT_WORDS for w in clean_words):
+            logger.info(f"Rejected (sentence word): {repr(term)}")
+            continue
+
+        # Skip if it's entirely filler words
+        if all(w in _FILLER_WORDS for w in clean_words):
+            logger.info(f"Rejected (all filler): {repr(term)}")
+            continue
+
+        # Skip if it's just a single filler verb
+        if len(clean_words) == 1 and clean_words[0] in _FILLER_VERBS:
+            logger.info(f"Rejected (bare verb): {repr(term)}")
+            continue
+
+        # Reject all-caps single words that are common example identifier names
+        # (e.g. MONDAY, TUESDAY, RED, FOO — these are illustrative placeholders in code)
+        if (len(words) == 1 and
+                term.isupper() and
+                term.isalpha() and
+                term.lower() in _EXAMPLE_IDENTIFIER_NAMES):
+            logger.info(f"Rejected (example identifier): {repr(term)}")
+            continue
+
+        # Skip if it overlaps with the title
+        if _term_overlaps_title(term, title_words, title_str):
+            logger.info(f"Rejected (title overlap): {repr(term)}")
+            continue
+
+        # Skip very short terms
+        if len(term.strip()) < 2:
+            continue
+
+        filtered.append(term)
+    return filtered
 
 
 # ── PDF processing (primary — most reliable) ──────────────────────────────────
+
+def _call_groq_occlusion(prompt: str) -> Optional[str]:
+    """Call Groq with a large, instruction-following model for occlusion term selection.
+    Uses llama-3.3-70b-versatile instead of the shared 8b-instant model."""
+    from app.core.config import settings
+    if not settings.GROQ_API_KEY:
+        return None
+    try:
+        from groq import Groq
+        client = Groq(api_key=settings.GROQ_API_KEY)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an Anki flashcard expert. "
+                        "You follow instructions exactly and return only valid JSON arrays. "
+                        "You never return full sentences as occlusion terms — only single keywords."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=300,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.warning(f"Groq 70b occlusion call failed: {e}")
+        return None
+
 
 def _ask_llm_for_key_terms(
     body_text: str,
@@ -164,7 +465,7 @@ def _ask_llm_for_key_terms(
     checklist_text: Optional[str] = None,
 ) -> List[str]:
     """Send slide body text (title stripped) to LLM, get back key terms."""
-    from app.services.llm import _call_groq, _call_ollama
+    from app.services.llm import _call_ollama
 
     checklist_section = (
         CHECKLIST_SECTION.format(checklist=checklist_text[:1500]) if checklist_text else ""
@@ -174,7 +475,8 @@ def _ask_llm_for_key_terms(
         body_text=body_text[:4000],
         checklist_section=checklist_section,
     )
-    raw = _call_ollama(prompt) or _call_groq(prompt)
+    # Try Ollama (local) first, then Groq 70B (large, instruction-following)
+    raw = _call_ollama(prompt) or _call_groq_occlusion(prompt)
     if not raw:
         return []
 
@@ -205,7 +507,8 @@ def _match_terms_to_pdf_words(
 
     for term in key_terms:
         term_lower = term.lower()
-        term_parts = term_lower.split()
+        # Hard cap: never span more than 2 words in the PDF, regardless of term length
+        term_parts = term_lower.split()[:2]
 
         for i in range(len(body_words)):
             if i in used:
@@ -229,7 +532,7 @@ def _match_terms_to_pdf_words(
                 if len(seq) < len(term_parts):
                     continue
                 seq_text = " ".join(w[4].lower() for w in seq)
-                if term_lower in seq_text or seq_text in term_lower:
+                if term_parts[0] in seq_text:
                     x = min(w[0] for w in seq) * scale
                     y = min(w[1] for w in seq) * scale
                     x1 = max(w[2] for w in seq) * scale
@@ -296,11 +599,24 @@ def _formatting_fallback(
 
                 is_bold = bool(flags & (1 << 4))
                 is_larger = size > median_size * 1.1
-                is_allcaps = text.isupper() and len(text) > 3
+                # Only treat as all-caps if it's not a common example identifier name
+                is_allcaps = (text.isupper() and len(text) > 3
+                              and text.lower() not in _EXAMPLE_IDENTIFIER_NAMES)
 
                 if is_bold or is_larger or is_allcaps:
+                    text_words = text.split()
+                    # Skip entire sentences — only cover short keywords/terms (≤3 words)
+                    if len(text_words) > 3:
+                        continue
+                    label = text.strip()
+                    if label.lower() in _FILLER_WORDS:
+                        continue
+                    # Skip all-caps example identifiers (enum values like MONDAY, FOO, etc.)
+                    if (label.isupper() and label.isalpha()
+                            and label.lower() in _EXAMPLE_IDENTIFIER_NAMES):
+                        continue
                     zones.append({
-                        "label": text,
+                        "label": label,
                         "x": round(bbox[0] * scale, 1),
                         "y": round(bbox[1] * scale, 1),
                         "width": round((bbox[2] - bbox[0]) * scale, 1),
@@ -345,8 +661,8 @@ def zones_for_pdf_page(
     if body_text.strip():
         key_terms = _ask_llm_for_key_terms(body_text, title_str, checklist_text)
 
-        # ── Step 4: hard post-filter — remove any term that is the title ──────
-        key_terms = [t for t in key_terms if not _term_overlaps_title(t, title_word_set)]
+        # ── Step 4: hard post-filter — word count, filler, title overlap ──────
+        key_terms = _post_filter_terms(key_terms, title_word_set, title_str)
 
         if key_terms:
             zones = _match_terms_to_pdf_words(words, key_terms, scale, title_max_y)
@@ -519,7 +835,7 @@ def zones_for_image(
         title_str = " ".join(w["text"] for w in words if w["y"] <= min_y + 30)
 
         key_terms = _ask_llm_for_key_terms(body_text or all_text, title_str, checklist_text)
-        key_terms = [t for t in key_terms if not _term_overlaps_title(t, title_words_set)]
+        key_terms = _post_filter_terms(key_terms, title_words_set, title_str)
 
         zones = []
         used: set = set()

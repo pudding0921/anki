@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -42,6 +43,7 @@ def create_deck(
         user_id=deck.user_id,
         created_at=deck.created_at,
         card_count=len(deck.cards),
+        folder_id=deck.folder_id,
     )
 
 
@@ -52,7 +54,7 @@ def list_decks(
 ):
     decks = (
         db.query(Deck)
-        .filter(Deck.user_id == current_user.id)
+        .filter(Deck.user_id == current_user.id, Deck.deleted_at == None)
         .order_by(Deck.created_at.desc())
         .all()
     )
@@ -63,7 +65,8 @@ def list_decks(
             description=d.description,
             user_id=d.user_id,
             created_at=d.created_at,
-            card_count=len(d.cards),
+            card_count=len([c for c in d.cards if c.deleted_at is None]),
+            folder_id=d.folder_id,
         )
         for d in decks
     ]
@@ -77,11 +80,12 @@ def get_deck(
 ):
     deck = (
         db.query(Deck)
-        .filter(Deck.id == deck_id, Deck.user_id == current_user.id)
+        .filter(Deck.id == deck_id, Deck.user_id == current_user.id, Deck.deleted_at == None)
         .first()
     )
     if not deck:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
+    deck.cards = [c for c in deck.cards if c.deleted_at is None]
     return deck
 
 
@@ -93,10 +97,10 @@ def delete_deck(
 ):
     deck = (
         db.query(Deck)
-        .filter(Deck.id == deck_id, Deck.user_id == current_user.id)
+        .filter(Deck.id == deck_id, Deck.user_id == current_user.id, Deck.deleted_at == None)
         .first()
     )
     if not deck:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
-    db.delete(deck)
+    deck.deleted_at = datetime.now(timezone.utc)
     db.commit()
