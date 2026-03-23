@@ -27,6 +27,7 @@ from app.database import Base, engine, SessionLocal
 # main.py lives at backend/app/main.py → parent × 2 = backend/
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _ABS_UPLOAD_DIR = str(_BACKEND_DIR / settings.UPLOAD_DIR)
+os.makedirs(_ABS_UPLOAD_DIR, exist_ok=True)
 
 
 def _migrate_db():
