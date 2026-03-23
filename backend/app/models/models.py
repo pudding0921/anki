@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -12,6 +12,12 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # Stripe subscription
+    stripe_customer_id = Column(String, nullable=True)
+    subscription_status = Column(String, default="free")   # free | active | canceled
+    subscription_plan = Column(String, nullable=True)       # monthly | biannual
+    subscription_end = Column(DateTime, nullable=True)
 
     decks = relationship("Deck", back_populates="owner", cascade="all, delete-orphan")
     reviews = relationship("Review", back_populates="user", cascade="all, delete-orphan")
@@ -98,3 +104,15 @@ class Review(Base):
 
     card = relationship("Card", back_populates="reviews")
     user = relationship("User", back_populates="reviews")
+
+
+class ContactMessage(Base):
+    __tablename__ = "contact_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    email = Column(String, nullable=False)
+    subject = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    read = Column(Boolean, default=False)

@@ -21,7 +21,7 @@ def apply_sm2(card: Card, quality: int) -> Card:
         elif n == 1:
             interval = 6
         else:
-            interval = round(interval * ef)
+            interval = max(1, round(interval * ef))
 
         ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
         ef = max(1.3, ef)

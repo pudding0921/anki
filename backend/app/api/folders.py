@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
@@ -32,13 +33,23 @@ def list_folders(
         .order_by(Folder.created_at)
         .all()
     )
+    # Fetch deck counts in one query instead of N lazy loads
+    folder_ids = [f.id for f in folders]
+    deck_counts: dict = {}
+    if folder_ids:
+        deck_counts = dict(
+            db.query(Deck.folder_id, func.count(Deck.id))
+            .filter(Deck.folder_id.in_(folder_ids), Deck.deleted_at == None)
+            .group_by(Deck.folder_id)
+            .all()
+        )
     return [
         FolderOut(
             id=f.id,
             name=f.name,
             user_id=f.user_id,
             created_at=f.created_at,
-            deck_count=len([d for d in f.decks if d.deleted_at is None]),
+            deck_count=deck_counts.get(f.id, 0),
         )
         for f in folders
     ]
@@ -88,7 +99,7 @@ def rename_folder(
         name=folder.name,
         user_id=folder.user_id,
         created_at=folder.created_at,
-        deck_count=len(folder.decks),
+        deck_count=len([d for d in folder.decks if d.deleted_at is None]),
     )
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { API_URL } from "@/lib/api";
 
@@ -9,6 +9,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [justRegistered, setJustRegistered] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("registered") === "1") setJustRegistered(true);
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -58,6 +64,11 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="glass rounded-2xl p-7 flex flex-col gap-5">
+          {justRegistered && (
+            <div className="text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
+              Account created! Sign in to start studying.
+            </div>
+          )}
           {error && (
             <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
               {error}
@@ -104,9 +115,9 @@ export default function LoginPage() {
 
           <p className="text-sm text-center text-muted-foreground">
             No account?{" "}
-            <Link href="/register" className="text-indigo-400 hover:text-indigo-300 font-medium transition-colors">
-              Create one free
-            </Link>
+            <a href="/#pricing" className="text-indigo-400 hover:text-indigo-300 font-medium transition-colors">
+              Get started
+            </a>
           </p>
         </div>
       </div>

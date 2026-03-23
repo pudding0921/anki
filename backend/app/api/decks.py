@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
@@ -58,6 +59,16 @@ def list_decks(
         .order_by(Deck.created_at.desc())
         .all()
     )
+    # Fetch card counts in one query instead of N lazy loads
+    deck_ids = [d.id for d in decks]
+    card_counts: dict = {}
+    if deck_ids:
+        card_counts = dict(
+            db.query(Card.deck_id, func.count(Card.id))
+            .filter(Card.deck_id.in_(deck_ids), Card.deleted_at == None)
+            .group_by(Card.deck_id)
+            .all()
+        )
     return [
         DeckOut(
             id=d.id,
@@ -65,7 +76,7 @@ def list_decks(
             description=d.description,
             user_id=d.user_id,
             created_at=d.created_at,
-            card_count=len([c for c in d.cards if c.deleted_at is None]),
+            card_count=card_counts.get(d.id, 0),
             folder_id=d.folder_id,
         )
         for d in decks
@@ -85,7 +96,11 @@ def get_deck(
     )
     if not deck:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deck not found")
-    deck.cards = [c for c in deck.cards if c.deleted_at is None]
+    deck.cards = (
+        db.query(Card)
+        .filter(Card.deck_id == deck_id, Card.deleted_at == None)
+        .all()
+    )
     return deck
 
 
