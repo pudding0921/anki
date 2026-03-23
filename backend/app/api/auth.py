@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.database import get_db
-from app.models.models import User
+from app.models.models import InviteCode, User
 from app.schemas.schemas import Token, UserLogin, UserOut, UserRegister
 
 logger = logging.getLogger(__name__)
@@ -46,11 +46,31 @@ def _link_stripe_session(user: User, session_id: str) -> None:
 def register(payload: UserRegister, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+
+    # Validate invite code if provided
+    invite = None
+    if payload.invite_code:
+        invite = db.query(InviteCode).filter(
+            InviteCode.code == payload.invite_code,
+            InviteCode.is_active == True,
+            InviteCode.used_by_email == None,
+        ).first()
+        if not invite:
+            raise HTTPException(status_code=400, detail="Invalid or already used invite code")
+
     user = User(email=payload.email, hashed_password=hash_password(payload.password))
     db.add(user)
     db.flush()
-    if payload.stripe_session_id:
+
+    if invite:
+        user.subscription_status = "active"
+        user.subscription_plan = "gifted"
+        invite.used_by_email = payload.email
+        invite.used_at = datetime.now(timezone.utc)
+        invite.is_active = False
+    elif payload.stripe_session_id:
         _link_stripe_session(user, payload.stripe_session_id)
+
     db.commit()
     db.refresh(user)
     return user

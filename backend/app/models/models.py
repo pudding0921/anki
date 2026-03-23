@@ -106,6 +106,17 @@ class Review(Base):
     user = relationship("User", back_populates="reviews")
 
 
+class InviteCode(Base):
+    __tablename__ = "invite_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    used_by_email = Column(String, nullable=True)
+    used_at = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
+
+
 class ContactMessage(Base):
     __tablename__ = "contact_messages"
 

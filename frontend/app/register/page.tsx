@@ -14,11 +14,16 @@ export default function RegisterPage() {
   // Read query params client-side to avoid Suspense requirement
   const [subscribed, setSubscribed] = useState<boolean | null>(null); // null = not yet read
   const [sessionId, setSessionId] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [showInviteInput, setShowInviteInput] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setSubscribed(params.get("subscribed") === "1");
+    const sub = params.get("subscribed") === "1";
+    const inv = params.get("invite") || "";
+    setSubscribed(sub || !!inv);
     setSessionId(params.get("session_id") || "");
+    if (inv) setInviteCode(inv);
   }, []);
 
   const passwordMismatch = confirm.length > 0 && confirm !== password;
@@ -34,6 +39,7 @@ export default function RegisterPage() {
     try {
       const body: Record<string, string> = { email, password };
       if (sessionId) body.stripe_session_id = sessionId;
+      if (inviteCode) body.invite_code = inviteCode;
 
       const res = await fetch(`${API_URL}/api/auth/register`, {
         method: "POST",
@@ -89,10 +95,40 @@ export default function RegisterPage() {
               View plans
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6" /></svg>
             </a>
+            {showInviteInput ? (
+              <div className="w-full flex flex-col gap-3">
+                <input
+                  type="text"
+                  className="input-base w-full text-center tracking-widest"
+                  placeholder="Enter invite code"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                />
+                <button
+                  onClick={() => { if (inviteCode.trim()) setSubscribed(true); }}
+                  className="w-full h-11 rounded-xl gradient-btn font-semibold text-sm flex items-center justify-center gap-2"
+                >
+                  Continue with invite code
+                </button>
+                <button
+                  onClick={() => setShowInviteInput(false)}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowInviteInput(true)}
+                className="text-sm text-indigo-400 hover:text-indigo-300 font-medium transition-colors"
+              >
+                Have an invite code?
+              </button>
+            )}
             <p className="text-sm text-muted-foreground">
               Already have an account?{" "}
               <Link href="/login" className="text-indigo-400 hover:text-indigo-300 font-medium transition-colors">
-                Sign in
+                Log in
               </Link>
             </p>
           </div>

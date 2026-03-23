@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # File storage
     UPLOAD_DIR: str = "uploads"
 
+    # Admin
+    ADMIN_SECRET: str = ""
+
     # Email (Gmail SMTP — use an App Password, not your real password)
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587

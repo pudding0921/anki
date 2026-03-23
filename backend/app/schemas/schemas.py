@@ -9,6 +9,7 @@ class UserRegister(BaseModel):
     email: EmailStr
     password: str
     stripe_session_id: Optional[str] = None  # passed after guest Stripe checkout
+    invite_code: Optional[str] = None         # alternative to Stripe payment
 
 
 class UserLogin(BaseModel):

@@ -20,6 +20,7 @@ from app.api import folders as folders_router
 from app.api import trash as trash_router
 from app.api import stripe_payments as stripe_router
 from app.api import contact as contact_router
+from app.api import admin as admin_router
 from app.core.config import settings
 from app.database import Base, engine, SessionLocal
 
@@ -103,3 +104,4 @@ app.include_router(study.router)
 app.include_router(export_router.router)
 app.include_router(stripe_router.router, prefix="/api")
 app.include_router(contact_router.router, prefix="/api")
+app.include_router(admin_router.router, prefix="/api")
