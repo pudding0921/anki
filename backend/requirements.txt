@@ -15,6 +15,7 @@ pytesseract==0.3.13
 Pillow>=10.4.0
 groq==1.0.0
 requests>=2.32.0
+resend>=2.0.0
 aiofiles==24.1.0
 # Phase 3-5 — SM-2, export, PDF
 genanki==0.13.0

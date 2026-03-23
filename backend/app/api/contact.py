@@ -1,8 +1,6 @@
 import logging
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
+import resend
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
@@ -24,25 +22,12 @@ class ContactRequest(BaseModel):
 
 
 def _send_email(body: ContactRequest) -> None:
-    """Send a contact form notification to the configured recipient via Gmail SMTP."""
-    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
-        logger.warning("SMTP credentials not configured — skipping email notification")
+    """Send a contact form notification via Resend."""
+    if not settings.RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not configured — skipping email notification")
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[FlowCard Contact] {body.subject}"
-    msg["From"] = settings.SMTP_USER
-    msg["To"] = settings.CONTACT_RECIPIENT
-    msg["Reply-To"] = body.email
-
-    plain = (
-        f"New contact message from FlowCard\n"
-        f"{'─' * 40}\n"
-        f"Name:    {body.name}\n"
-        f"Email:   {body.email}\n"
-        f"Subject: {body.subject}\n\n"
-        f"{body.message}\n"
-    )
+    resend.api_key = settings.RESEND_API_KEY
 
     html = f"""
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#1a1a2e">
@@ -65,14 +50,13 @@ def _send_email(body: ContactRequest) -> None:
     </div>
     """
 
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
-
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
-        server.ehlo()
-        server.starttls()
-        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-        server.sendmail(settings.SMTP_USER, settings.CONTACT_RECIPIENT, msg.as_string())
+    resend.Emails.send({
+        "from": settings.RESEND_FROM_EMAIL,
+        "to": [settings.CONTACT_RECIPIENT],
+        "reply_to": body.email,
+        "subject": f"[FlowCard Contact] {body.subject}",
+        "html": html,
+    })
 
 
 @router.post("")

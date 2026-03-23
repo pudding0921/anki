@@ -32,11 +32,9 @@ class Settings(BaseSettings):
     # Admin
     ADMIN_SECRET: str = ""
 
-    # Email (Gmail SMTP — use an App Password, not your real password)
-    SMTP_HOST: str = "smtp.gmail.com"
-    SMTP_PORT: int = 587
-    SMTP_USER: str = ""        # Gmail address you send FROM
-    SMTP_PASSWORD: str = ""    # Gmail App Password
+    # Email (Resend)
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = "FlowCard <noreply@flowcard.pro>"
     CONTACT_RECIPIENT: str = "taexk2006@gmail.com"
 
     class Config:
