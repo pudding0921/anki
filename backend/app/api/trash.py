@@ -88,7 +88,7 @@ def get_trash(
                 id=d.id,
                 name=d.name,
                 description=d.description,
-                card_count=len(d.cards),
+                card_count=len([c for c in d.cards if c.deleted_at is None]),
                 deleted_at=d.deleted_at,
                 days_remaining=_days_remaining(d.deleted_at),
             )

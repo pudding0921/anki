@@ -59,8 +59,11 @@ async def generate_cards(
     all_text_parts: List[str] = []
     first_image_path: Optional[str] = None
 
+    MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
     for upload in files:
         content = await upload.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=413, detail=f"File '{upload.filename}' exceeds the 50 MB limit")
         fname = upload.filename or "upload"
         ext = os.path.splitext(fname)[1].lower() or ".bin"
 
@@ -94,6 +97,8 @@ async def upload_pages(
 ):
     """Upload an image or PDF. Returns list of rendered page images."""
     content = await file.read()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File exceeds the 50 MB limit")
     fname = file.filename or "upload"
     ext = os.path.splitext(fname)[1].lower()
 

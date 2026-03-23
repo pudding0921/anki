@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { API_URL } from "@/lib/api";
 
 // ── Scroll-reveal hook ──────────────────────────────────────────────────────
 function useReveal() {
@@ -150,6 +151,149 @@ function Reveal({ children, delay = 0, className = "" }: { children: React.React
   );
 }
 
+// ── Pricing button (redirects to Stripe checkout) ───────────────────────────
+function PricingButton({ plan, label, className = "" }: { plan: string; label: string; className?: string }) {
+  const [loading, setLoading] = useState(false);
+
+  async function handleClick() {
+    setLoading(true);
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const endpoint = token ? "/api/stripe/create-checkout" : "/api/stripe/create-checkout-guest";
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ plan }),
+      });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    } catch {
+      alert("Could not start checkout. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={loading}
+      className={`mt-auto w-full py-2.5 rounded-xl text-sm font-semibold transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+        className || "gradient-btn"
+      }`}
+    >
+      {loading ? "Redirecting…" : label}
+    </button>
+  );
+}
+
+// ── Contact form ─────────────────────────────────────────────────────────────
+function ContactForm() {
+  const [form, setForm] = useState({ name: "", email: "", subject: "", message: "" });
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_URL}/api/contact`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (res.ok) {
+        setSuccess(true);
+        setForm({ name: "", email: "", subject: "", message: "" });
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setError(d.detail || "Something went wrong. Please try again.");
+      }
+    } catch {
+      setError("Could not reach the server. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (success) {
+    return (
+      <div className="glass border border-emerald-400/20 rounded-2xl p-10 flex flex-col items-center gap-4 text-center">
+        <div className="w-14 h-14 rounded-full bg-emerald-400/15 border border-emerald-400/25 flex items-center justify-center text-2xl">✓</div>
+        <h3 className="text-lg font-bold text-emerald-400">Message sent!</h3>
+        <p className="text-sm text-muted-foreground">Thanks for reaching out. We will get back to you within 24 hours.</p>
+        <button onClick={() => setSuccess(false)} className="text-xs text-muted-foreground hover:text-foreground transition-colors mt-2">
+          Send another message
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="glass border border-border rounded-2xl p-8 flex flex-col gap-5">
+      {error && (
+        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">{error}</div>
+      )}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Name</label>
+          <input
+            required
+            className="input-base"
+            placeholder="Your name"
+            value={form.name}
+            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Email</label>
+          <input
+            required
+            type="email"
+            className="input-base"
+            placeholder="you@example.com"
+            value={form.email}
+            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+          />
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Subject</label>
+        <input
+          required
+          className="input-base"
+          placeholder="What is this about?"
+          value={form.subject}
+          onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))}
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Message</label>
+        <textarea
+          required
+          rows={5}
+          className="input-base resize-none h-auto py-3"
+          placeholder="Tell us what you need..."
+          value={form.message}
+          onChange={(e) => setForm((f) => ({ ...f, message: e.target.value }))}
+        />
+      </div>
+      <button
+        type="submit"
+        disabled={loading}
+        className="h-11 rounded-xl gradient-btn font-semibold text-sm transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        {loading ? "Sending…" : "Send message →"}
+      </button>
+    </form>
+  );
+}
+
 // ── Page ────────────────────────────────────────────────────────────────────
 export default function LandingPage() {
   const [scrolled, setScrolled] = useState(false);
@@ -180,19 +324,11 @@ export default function LandingPage() {
             </div>
             <span className="text-lg font-bold gradient-brand">FlowCard</span>
           </Link>
-          <div className="flex items-center gap-3">
-            <Link
-              href="/login"
-              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5"
-            >
-              Log in
-            </Link>
-            <Link
-              href="/register"
-              className="text-sm font-semibold px-4 py-2 rounded-lg gradient-btn transition-all"
-            >
-              Get started free
-            </Link>
+          <div className="flex items-center gap-1">
+            <a href="#pricing" className="hidden sm:block text-sm font-medium text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5">Pricing</a>
+            <a href="#contact" className="hidden sm:block text-sm font-medium text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5">Contact</a>
+            <Link href="/login" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5">Log in</Link>
+            <a href="#pricing" className="text-sm font-semibold px-4 py-2 rounded-lg gradient-btn transition-all">Get started</a>
           </div>
         </div>
       </nav>
@@ -230,7 +366,7 @@ export default function LandingPage() {
           style={{ animation: "fade-in-down 0.7s ease both" }}
         >
           <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-          AI-powered · Spaced Repetition · Free to use
+          AI-powered · Spaced Repetition · Image Occlusion
         </div>
 
         {/* Headline */}
@@ -256,13 +392,13 @@ export default function LandingPage() {
           className="relative z-10 flex gap-3 flex-wrap justify-center"
           style={{ animation: "fade-in-up 0.7s ease 0.3s both" }}
         >
-          <Link
-            href="/register"
+          <a
+            href="#pricing"
             className="flex items-center gap-2 px-7 py-3.5 rounded-xl gradient-btn text-sm font-bold shadow-xl shadow-indigo-500/20 hover:scale-105 active:scale-95 transition-transform"
           >
-            Start for free
+            See plans
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6" /></svg>
-          </Link>
+          </a>
           <Link
             href="/login"
             className="flex items-center gap-2 px-7 py-3.5 rounded-xl border border-border text-sm font-semibold hover:bg-muted transition-colors"
@@ -275,7 +411,7 @@ export default function LandingPage() {
           className="relative z-10 text-xs text-muted-foreground/60"
           style={{ animation: "fade-in-up 0.7s ease 0.4s both" }}
         >
-          No credit card · No setup · Works in seconds
+          Cancel anytime · Instant access · No hidden fees
         </p>
 
         {/* Floating flashcard mockup */}
@@ -332,7 +468,7 @@ export default function LandingPage() {
             { value: 50000, suffix: "+", label: "Cards generated" },
             { value: 10, suffix: "s", label: "Avg. generation time" },
             { value: 98, suffix: "%", label: "Retention rate" },
-            { value: 100, suffix: "% free", label: "Always" },
+            { value: 30, suffix: "s", label: "First deck ready in" },
           ].map((stat) => (
             <Reveal key={stat.label} className="flex flex-col gap-1">
               <span className="text-3xl font-extrabold gradient-brand">
@@ -435,6 +571,92 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Pricing ─────────────────────────────────────────────────────── */}
+      <section id="pricing" className="py-28 px-4 bg-card/20 border-y border-border/40">
+        <div className="max-w-3xl mx-auto flex flex-col gap-14">
+          <Reveal className="text-center flex flex-col gap-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-indigo-300">Pricing</p>
+            <h2 className="text-4xl font-extrabold tracking-tight">Simple, transparent pricing</h2>
+            <p className="text-muted-foreground max-w-md mx-auto">Full access to every feature. Pick the plan that works for you.</p>
+          </Reveal>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+            {/* Monthly — highlighted */}
+            <Reveal delay={0}>
+              <div className="relative glass border-2 border-indigo-400/40 rounded-2xl p-7 flex flex-col gap-5 shadow-xl shadow-indigo-500/10">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-indigo-400 to-violet-500 text-white text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full">
+                  Most popular
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-indigo-300">Monthly</p>
+                  <div className="flex items-end gap-1 mt-2">
+                    <span className="text-4xl font-extrabold">$4.99</span>
+                    <span className="text-muted-foreground text-sm mb-1">/mo</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">Billed monthly. Cancel anytime.</p>
+                </div>
+                <ul className="flex flex-col gap-2.5 text-sm">
+                  {["Unlimited decks & cards", "AI flashcard generation", "Image occlusion AI", "Spaced repetition (SM-2)", "Anki export (.apkg)", "Priority support"].map((f) => (
+                    <li key={f} className="flex items-center gap-2.5">
+                      <svg className="w-4 h-4 text-indigo-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <PricingButton plan="monthly" label="Get started — $4.99/mo" />
+              </div>
+            </Reveal>
+
+            {/* 6-month */}
+            <Reveal delay={100}>
+              <div className="relative glass border border-emerald-400/30 rounded-2xl p-7 flex flex-col gap-5">
+                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-emerald-400/15 border border-emerald-400/30 text-emerald-300 text-[10px] font-bold uppercase tracking-widest px-3 py-1 rounded-full">
+                  Best value
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-emerald-300">6 Months</p>
+                  <div className="flex items-end gap-1 mt-2">
+                    <span className="text-4xl font-extrabold">$19.99</span>
+                    <span className="text-muted-foreground text-sm mb-1">/6 mo</span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <p className="text-sm text-muted-foreground">~$3.33/mo</p>
+                    <span className="text-[10px] font-bold bg-emerald-400/15 text-emerald-400 border border-emerald-400/25 px-2 py-0.5 rounded-full">Save 33%</span>
+                  </div>
+                </div>
+                <ul className="flex flex-col gap-2.5 text-sm">
+                  {["Everything in Monthly", "6 months for the price of 4", "Unlimited decks & cards", "All AI features", "Anki export (.apkg)", "Priority support"].map((f) => (
+                    <li key={f} className="flex items-center gap-2.5">
+                      <svg className="w-4 h-4 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <PricingButton plan="biannual" label="Save 33% — 6 Months" className="border-emerald-400/30 bg-emerald-400/8 text-emerald-300 hover:bg-emerald-400/15" />
+              </div>
+            </Reveal>
+          </div>
+
+          <Reveal className="text-center">
+            <p className="text-xs text-muted-foreground/60">Secure checkout via Stripe · Cancel anytime from your account settings</p>
+          </Reveal>
+        </div>
+      </section>
+
+      {/* ── Contact ──────────────────────────────────────────────────────── */}
+      <section id="contact" className="py-28 px-4">
+        <div className="max-w-2xl mx-auto flex flex-col gap-14">
+          <Reveal className="text-center flex flex-col gap-3">
+            <p className="text-xs font-bold uppercase tracking-widest text-violet-300">Contact</p>
+            <h2 className="text-4xl font-extrabold tracking-tight">Get in touch</h2>
+            <p className="text-muted-foreground max-w-md mx-auto">Have a question, feedback, or a bug to report? We read every message and usually reply within 24 hours.</p>
+          </Reveal>
+          <Reveal>
+            <ContactForm />
+          </Reveal>
+        </div>
+      </section>
+
       {/* ── CTA ─────────────────────────────────────────────────────────── */}
       <section className="py-28 px-4 relative overflow-hidden">
         <div className="pointer-events-none absolute inset-0">
@@ -450,16 +672,16 @@ export default function LandingPage() {
             <span className="gradient-brand">Start remembering.</span>
           </h2>
           <p className="text-muted-foreground text-lg max-w-md">
-            Create your free account and generate your first deck in under 60 seconds.
+            Pick a plan and generate your first deck in under 60 seconds.
           </p>
-          <Link
-            href="/register"
+          <a
+            href="#pricing"
             className="flex items-center gap-2 px-8 py-4 rounded-xl gradient-btn text-base font-bold shadow-xl shadow-indigo-500/20 hover:scale-105 active:scale-95 transition-transform"
           >
-            Create free account
+            View plans
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="9 18 15 12 9 6" /></svg>
-          </Link>
-          <p className="text-xs text-muted-foreground/60">No credit card · No setup · No catch</p>
+          </a>
+          <p className="text-xs text-muted-foreground/60">Cancel anytime · Instant access · Secure checkout</p>
         </Reveal>
       </section>
 
@@ -474,10 +696,11 @@ export default function LandingPage() {
             </div>
             <span className="text-sm font-bold gradient-brand">FlowCard</span>
           </div>
-          <p className="text-xs text-muted-foreground/60">Built with AI — free for everyone, forever.</p>
+          <p className="text-xs text-muted-foreground/60">© 2025 FlowCard. All rights reserved.</p>
           <div className="flex gap-5 text-xs text-muted-foreground">
+            <a href="#pricing" className="hover:text-foreground transition-colors">Pricing</a>
+            <a href="#contact" className="hover:text-foreground transition-colors">Contact</a>
             <Link href="/login" className="hover:text-foreground transition-colors">Log in</Link>
-            <Link href="/register" className="hover:text-foreground transition-colors">Sign up</Link>
           </div>
         </div>
       </footer>

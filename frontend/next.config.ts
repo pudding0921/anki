@@ -1,14 +1,13 @@
 import type { NextConfig } from "next";
-import path from "path";
 
 const nextConfig: NextConfig = {
-  output: "export",
   images: {
     unoptimized: true,
   },
-  turbopack: {
-    root: path.resolve(__dirname),
-  },
+  // turbopack.root silences the workspace-root warning in local dev only
+  ...(process.env.NODE_ENV === "development" && {
+    turbopack: { root: __dirname },
+  }),
 };
 
 export default nextConfig;
