@@ -32,7 +32,7 @@ interface PendingDelete {
 
 interface ConfirmState {
   isOpen: boolean;
-  itemType: "deck" | "folder" | "card";
+  itemType: "deck" | "folder" | "card" | "subscription";
   itemName: string;
   onConfirm: () => void;
 }
@@ -552,7 +552,7 @@ export default function DashboardPage() {
             </button>
             <button
               className="text-xs font-medium px-3 py-2 rounded-lg hover:bg-red-500/10 hover:text-red-400 transition-colors text-muted-foreground"
-              onClick={() => setConfirm({
+              onClick={() => setConfirmState({
                 isOpen: true,
                 itemType: "subscription",
                 itemName: "subscription",
