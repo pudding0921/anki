@@ -3,11 +3,12 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.limiter import limiter
 from app.database import get_db
 from app.models.models import ContactMessage
 
@@ -75,7 +76,8 @@ def _send_email(body: ContactRequest) -> None:
 
 
 @router.post("")
-def send_message(body: ContactRequest, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def send_message(request: Request, body: ContactRequest, db: Session = Depends(get_db)):
     # Always save to DB first
     msg = ContactMessage(
         name=body.name.strip(),

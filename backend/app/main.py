@@ -3,9 +3,11 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
 logging.basicConfig(
@@ -22,6 +24,7 @@ from app.api import stripe_payments as stripe_router
 from app.api import contact as contact_router
 from app.api import admin as admin_router
 from app.core.config import settings
+from app.core.limiter import limiter
 from app.database import Base, engine, SessionLocal
 
 # Absolute path to the uploads directory — never depends on CWD.
@@ -69,6 +72,10 @@ def _migrate_db():
 async def lifespan(app: FastAPI):
     if settings.SECRET_KEY == "dev-secret-key-change-in-production":
         logger.warning("SECRET_KEY is using the default development value — change it in production!")
+    if not settings.ADMIN_SECRET:
+        logger.warning("ADMIN_SECRET is not set — admin endpoints are disabled!")
+    if not settings.STRIPE_WEBHOOK_SECRET:
+        logger.warning("STRIPE_WEBHOOK_SECRET is not set — subscription webhooks will fail!")
     Base.metadata.create_all(bind=engine)
     os.makedirs(_ABS_UPLOAD_DIR, exist_ok=True)
     _migrate_db()
@@ -76,16 +83,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="FlowCard", version="0.3.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS — only allow localhost in non-production
+_is_production = settings.FRONTEND_URL.startswith("https://flowcard.pro")
+_cors_origins = ["https://flowcard.pro", "https://www.flowcard.pro"]
+if not _is_production:
+    _cors_origins += ["http://localhost:3000", "http://localhost:3001"]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "https://flowcard.pro",
-        "https://www.flowcard.pro",
-        "https://flowcard.pages.dev",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "Accept"],

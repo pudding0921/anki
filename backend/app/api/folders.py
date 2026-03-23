@@ -86,7 +86,7 @@ def rename_folder(
 ):
     folder = (
         db.query(Folder)
-        .filter(Folder.id == folder_id, Folder.user_id == current_user.id)
+        .filter(Folder.id == folder_id, Folder.user_id == current_user.id, Folder.deleted_at == None)
         .first()
     )
     if not folder:
