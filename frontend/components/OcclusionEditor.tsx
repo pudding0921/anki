@@ -77,6 +77,7 @@ export default function OcclusionEditor({
   const [zones, setZones] = useState<Zone[]>(initialZones);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [scale, setScale] = useState(1);
+  const [imgRevision, setImgRevision] = useState(0);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const iactionRef = useRef<Interaction>({ kind: "idle" });
 
@@ -95,6 +96,7 @@ export default function OcclusionEditor({
   }, [initialZones]);
 
   useEffect(() => {
+    imgRef.current = null;
     const img = new Image();
     img.src = imageUrl;
     img.onload = () => {
@@ -102,6 +104,8 @@ export default function OcclusionEditor({
       if (containerRef.current) {
         setScale(Math.min(1, containerRef.current.clientWidth / imageWidth));
       }
+      // Always force a redraw — setScale won't trigger one if scale didn't change
+      setImgRevision((r) => r + 1);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageUrl]);
@@ -157,7 +161,7 @@ export default function OcclusionEditor({
   useEffect(() => {
     redraw(zones, selectedId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zones, scale, selectedId]);
+  }, [zones, scale, selectedId, imgRevision]);
 
   function getPos(e: React.MouseEvent<HTMLCanvasElement>) {
     const r = canvasRef.current!.getBoundingClientRect();
