@@ -433,14 +433,18 @@ export default function DashboardPage() {
     fetch(`${API_URL}/api/decks/${id}/export`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
-      .then((res) => res.blob())
+      .then((res) => {
+        if (!res.ok) throw new Error(`Export failed (${res.status})`);
+        return res.blob();
+      })
       .then((blob) => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url; a.download = `${name}.apkg`;
         document.body.appendChild(a); a.click();
         document.body.removeChild(a); URL.revokeObjectURL(url);
-      });
+      })
+      .catch((err) => alert(`Export failed: ${err.message}`));
   }
 
   function moveDeck(deckId: number, folderId: number | null) {

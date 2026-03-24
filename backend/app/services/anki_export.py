@@ -1,5 +1,7 @@
 import hashlib
 import os
+import shutil
+import tempfile
 import genanki
 from typing import List
 from app.models.models import Card
@@ -132,69 +134,91 @@ def export_deck_to_apkg(
     anki_deck = genanki.Deck(_deck_id(deck_name), deck_name)
     media_files: List[str] = []
     seen_media: set = set()
+    _tmp_dir = tempfile.mkdtemp()  # scratch space for remote images
 
-    for card in cards:
-        if card.card_type == "occlusion":
-            if not card.occlusion_zones:
-                continue
+    try:
+        for card in cards:
+            if card.card_type == "occlusion":
+                if not card.occlusion_zones:
+                    continue
 
-            img_filename = ""
-            img_w = card.image_width or 800
-            img_h = card.image_height or 600
+                img_filename = ""
+                img_w = card.image_width or 800
+                img_h = card.image_height or 600
 
-            if card.image_path:
-                img_filename = os.path.basename(card.image_path)
-                abs_img = os.path.join(upload_root, card.image_path.lstrip("/"))
-                if os.path.exists(abs_img):
-                    if abs_img not in seen_media:
-                        media_files.append(abs_img)
-                        seen_media.add(abs_img)
-                else:
-                    img_filename = ""  # image missing — fall back to text-only
+                if card.image_path:
+                    if card.image_path.startswith("http"):
+                        # Remote URL (e.g. Supabase) — download to temp dir
+                        try:
+                            import requests as _req
+                            resp = _req.get(card.image_path, timeout=30)
+                            resp.raise_for_status()
+                            basename = os.path.basename(card.image_path.split("?")[0]) or "image.png"
+                            local = os.path.join(_tmp_dir, basename)
+                            with open(local, "wb") as fh:
+                                fh.write(resp.content)
+                            img_filename = basename
+                            if local not in seen_media:
+                                media_files.append(local)
+                                seen_media.add(local)
+                        except Exception:
+                            img_filename = ""
+                    else:
+                        img_filename = os.path.basename(card.image_path)
+                        abs_img = os.path.join(upload_root, card.image_path.lstrip("/"))
+                        if os.path.exists(abs_img):
+                            if abs_img not in seen_media:
+                                media_files.append(abs_img)
+                                seen_media.add(abs_img)
+                        else:
+                            img_filename = ""  # image missing — fall back to text-only
 
-            if not img_filename:
-                # No image — produce simple text cards per zone
-                for zone in card.occlusion_zones:
+                if not img_filename:
+                    # No image — produce simple text cards per zone
+                    for zone in card.occlusion_zones:
+                        note = genanki.Note(
+                            model=_MODEL,
+                            fields=[
+                                "<p>Recall: <b>____</b></p>",
+                                f"<b style='font-size:24px'>{zone.label}</b>",
+                            ],
+                            guid=_note_guid(deck_name, str(card.id), str(zone.id)),
+                        )
+                        anki_deck.add_note(note)
+                    continue
+
+                # One Anki note per zone — with rendered overlay boxes
+                for i, zone in enumerate(card.occlusion_zones):
+                    front = _occlusion_html(
+                        img_filename, img_w, img_h, card.occlusion_zones, i,
+                        is_back=False, label=zone.label,
+                    )
+                    back = _occlusion_html(
+                        img_filename, img_w, img_h, card.occlusion_zones, i,
+                        is_back=True, label=zone.label,
+                    )
                     note = genanki.Note(
                         model=_MODEL,
-                        fields=[
-                            "<p>Recall: <b>____</b></p>",
-                            f"<b style='font-size:24px'>{zone.label}</b>",
-                        ],
+                        fields=[front, back],
                         guid=_note_guid(deck_name, str(card.id), str(zone.id)),
                     )
                     anki_deck.add_note(note)
-                continue
 
-            # One Anki note per zone — with rendered overlay boxes
-            for i, zone in enumerate(card.occlusion_zones):
-                front = _occlusion_html(
-                    img_filename, img_w, img_h, card.occlusion_zones, i,
-                    is_back=False, label=zone.label,
-                )
-                back = _occlusion_html(
-                    img_filename, img_w, img_h, card.occlusion_zones, i,
-                    is_back=True, label=zone.label,
-                )
+            else:
+                front = (card.front or "").strip()
+                if not front:
+                    continue
                 note = genanki.Note(
                     model=_MODEL,
-                    fields=[front, back],
-                    guid=_note_guid(deck_name, str(card.id), str(zone.id)),
+                    fields=[front, card.back or ""],
+                    guid=_note_guid(deck_name, str(card.id)),
                 )
                 anki_deck.add_note(note)
 
-        else:
-            front = (card.front or "").strip()
-            if not front:
-                continue
-            note = genanki.Note(
-                model=_MODEL,
-                fields=[front, card.back or ""],
-                guid=_note_guid(deck_name, str(card.id)),
-            )
-            anki_deck.add_note(note)
+        pkg = genanki.Package(anki_deck)
+        pkg.media_files = media_files
+        pkg.write_to_file(output_path)
+    finally:
+        shutil.rmtree(_tmp_dir, ignore_errors=True)
 
-    pkg = genanki.Package(anki_deck)
-    pkg.media_files = media_files
-    pkg.write_to_file(output_path)
     return output_path

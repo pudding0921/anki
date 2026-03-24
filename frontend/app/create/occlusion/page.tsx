@@ -18,6 +18,7 @@ interface PageResult {
   page: number;
   status: "created" | "skipped" | "error";
   zones?: number;
+  diagrams?: number;
   reason?: string;
 }
 
@@ -372,7 +373,7 @@ export default function OcclusionPage() {
                   {r.status === "created" ? (
                     <span className="text-emerald-400 font-medium">
                       ✓ {r.zones} zone{r.zones !== 1 ? "s" : ""}
-                      {(r as any).diagrams > 0 && ` + ${(r as any).diagrams} diagram card${(r as any).diagrams !== 1 ? "s" : ""}`}
+                      {r.diagrams != null && r.diagrams > 0 && ` + ${r.diagrams} diagram card${r.diagrams !== 1 ? "s" : ""}`}
                     </span>
                   ) : (
                     <span className="text-muted-foreground text-xs">{r.reason ?? "skipped"}</span>
