@@ -550,25 +550,12 @@ export default function DashboardPage() {
             >
               <IconTrash className="w-4 h-4" />
             </button>
-            <button
-              className="text-xs font-medium px-3 py-2 rounded-lg hover:bg-red-500/10 hover:text-red-400 transition-colors text-muted-foreground"
-              onClick={() => setConfirmState({
-                isOpen: true,
-                itemType: "subscription",
-                itemName: "subscription",
-                onConfirm: async () => {
-                  const token = localStorage.getItem("token");
-                  await fetch(`${API_URL}/api/stripe/cancel`, {
-                    method: "POST",
-                    headers: token ? { Authorization: `Bearer ${token}` } : {},
-                  });
-                  localStorage.removeItem("token");
-                  window.location.href = "/?subscription=canceled";
-                },
-              })}
+            <Link
+              href="/account"
+              className="text-xs font-medium px-3 py-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
             >
-              Cancel subscription
-            </button>
+              Account
+            </Link>
             <button
               className="text-xs font-medium px-3 py-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
               onClick={() => { localStorage.removeItem("token"); window.location.href = "/login"; }}

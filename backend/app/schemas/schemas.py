@@ -185,6 +185,17 @@ class TrashResponse(BaseModel):
     cards: List[TrashCardOut]
 
 
+# --- Account ---
+
+class ChangeEmailRequest(BaseModel):
+    current_password: str
+    new_email: EmailStr
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 # --- SM-2 Study ---
 
 class ReviewCreate(BaseModel):

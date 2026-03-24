@@ -24,7 +24,7 @@ def get_current_user(
 
 def get_active_user(current_user: User = Depends(get_current_user)) -> User:
     """Require an active (paid or gifted) subscription."""
-    if current_user.subscription_status not in ("active", "trialing"):
+    if current_user.subscription_status not in ("active", "trialing", "canceling"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your subscription has been canceled and your account access has been removed",

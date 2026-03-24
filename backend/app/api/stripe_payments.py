@@ -152,8 +152,8 @@ def cancel_subscription(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Immediately cancel the active Stripe subscription and revoke account access."""
-    if not current_user.stripe_customer_id or current_user.subscription_status != "active":
+    """Cancel at period end — user keeps access until their billing period expires."""
+    if not current_user.stripe_customer_id or current_user.subscription_status not in ("active", "trialing"):
         raise HTTPException(status_code=400, detail="No active subscription to cancel")
 
     try:
@@ -163,11 +163,14 @@ def cancel_subscription(
             limit=1,
         )
         if subscriptions.data:
-            stripe.Subscription.cancel(subscriptions.data[0].id)
+            sub = stripe.Subscription.modify(subscriptions.data[0].id, cancel_at_period_end=True)
+            end_ts = sub.get("current_period_end")
+            if end_ts:
+                current_user.subscription_end = datetime.fromtimestamp(end_ts, tz=timezone.utc)
     except stripe.error.StripeError as e:
         raise HTTPException(status_code=400, detail=getattr(e, "user_message", str(e)))
 
-    current_user.subscription_status = "canceled"
-    current_user.subscription_plan = None
+    current_user.subscription_status = "canceling"
     db.commit()
-    return {"ok": True}
+    access_until = current_user.subscription_end.isoformat() if current_user.subscription_end else None
+    return {"ok": True, "access_until": access_until}
