@@ -127,7 +127,9 @@ async def upload_pages(
             source_pdf_url = f"/uploads/{current_user.id}/{pdf_name}"
 
             doc = fitz.open(pdf_abs)
-            mat = fitz.Matrix(2, 2)
+            # 3x scale = 216 DPI — noticeably sharper than 2x on HiDPI screens
+            _RENDER_SCALE = 3
+            mat = fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE)
             for i, page in enumerate(doc):
                 pix = page.get_pixmap(matrix=mat)
                 img_name = f"{uuid.uuid4()}.png"
@@ -144,6 +146,7 @@ async def upload_pages(
                     "height": pix.height,
                     "page": i + 1,
                     "source_pdf": source_pdf_url,
+                    "render_scale": _RENDER_SCALE,
                 })
             doc.close()
         except ImportError:
@@ -222,53 +225,63 @@ async def batch_occlusion(
 
     def _process_page_sync(page: dict) -> dict:
         """Run all AI work for one page in a thread. Returns a result dict."""
+        import requests as _requests
         image_path = page["image_path"]
         img_w = int(page["width"])
         img_h = int(page["height"])
         page_num = page.get("page", 1)
         source_pdf = page.get("source_pdf")
+        render_scale = float(page.get("render_scale", 2.0))  # default 2.0 for old clients
 
         zones = []
         diagram_specs = []
 
+        # ── Step 1: Try PDF word-position extraction (highest accuracy) ──────
         if source_pdf:
             abs_pdf = _resolve_upload_path(source_pdf)
             try:
                 import fitz
                 doc = fitz.open(abs_pdf)
                 fitz_page = doc[page_num - 1]
-                zones = zones_for_pdf_page(fitz_page, scale=2.0, checklist_text=checklist_text)
+                zones = zones_for_pdf_page(fitz_page, scale=render_scale, checklist_text=checklist_text)
                 try:
                     diagram_specs = diagram_cards_for_pdf_page(fitz_page)
                 except Exception as e:
                     logger.warning(f"Diagram detection failed on page {page_num}: {e}")
                 doc.close()
             except Exception as e:
-                logger.warning(f"Could not open PDF {abs_pdf}: {e}")
-                return {"page": page_num, "status": "error", "reason": "pdf not found",
-                        "image_path": image_path, "img_w": img_w, "img_h": img_h,
-                        "zones": [], "diagram_specs": []}
-        else:
-            # image_path may be a Supabase URL (https://...) or local path (/uploads/...)
+                logger.warning(f"PDF processing failed for page {page_num}: {e}")
+                # Don't return error — fall through to vision model below
+
+        # ── Step 2: If no zones yet, use vision model on the rendered image ──
+        # This handles: image-heavy slides, slides without detectable text
+        # formatting, PDF not available (ephemeral filesystem), etc.
+        if not zones:
+            image_bytes: Optional[bytes] = None
             if image_path.startswith("http"):
-                import requests as _requests
                 try:
                     r = _requests.get(image_path, timeout=30)
                     r.raise_for_status()
                     image_bytes = r.content
                 except Exception as e:
-                    return {"page": page_num, "status": "error", "reason": f"could not fetch image: {e}",
-                            "image_path": image_path, "img_w": img_w, "img_h": img_h,
-                            "zones": [], "diagram_specs": []}
+                    logger.warning(f"Could not fetch image for page {page_num}: {e}")
             else:
                 abs_path = _resolve_upload_path(image_path)
-                if not os.path.exists(abs_path):
-                    return {"page": page_num, "status": "error", "reason": "file not found",
-                            "image_path": image_path, "img_w": img_w, "img_h": img_h,
-                            "zones": [], "diagram_specs": []}
-                with open(abs_path, "rb") as f:
-                    image_bytes = f.read()
-            zones = zones_for_image(image_bytes, img_w, img_h, checklist_text=checklist_text)
+                if os.path.exists(abs_path):
+                    with open(abs_path, "rb") as f:
+                        image_bytes = f.read()
+                else:
+                    logger.warning(f"Image not found for page {page_num}: {abs_path}")
+
+            if image_bytes:
+                logger.info(f"Using vision model fallback for page {page_num}")
+                zones = zones_for_image(image_bytes, img_w, img_h, checklist_text=checklist_text)
+            elif not source_pdf:
+                # Image was the only option and it couldn't be loaded — real error
+                reason = "could not fetch image" if image_path.startswith("http") else "file not found"
+                return {"page": page_num, "status": "error", "reason": reason,
+                        "image_path": image_path, "img_w": img_w, "img_h": img_h,
+                        "zones": [], "diagram_specs": []}
 
         return {
             "page": page_num,

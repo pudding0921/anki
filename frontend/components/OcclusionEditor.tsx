@@ -78,15 +78,27 @@ export default function OcclusionEditor({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [scale, setScale] = useState(1);
   const [imgRevision, setImgRevision] = useState(0);
+  const [dpr, setDpr] = useState(1);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const iactionRef = useRef<Interaction>({ kind: "idle" });
 
   const zonesRef = useRef(zones);
   const scaleRef = useRef(scale);
   const selectedIdRef = useRef(selectedId);
+  const dprRef = useRef(dpr);
   useEffect(() => { zonesRef.current = zones; }, [zones]);
   useEffect(() => { scaleRef.current = scale; }, [scale]);
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
+  useEffect(() => { dprRef.current = dpr; }, [dpr]);
+
+  // Set real DPR on mount (and update canvas when DPR changes, e.g. window moves screens)
+  useEffect(() => {
+    const update = () => setDpr(window.devicePixelRatio || 1);
+    update();
+    const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     setZones(initialZones);
@@ -117,9 +129,15 @@ export default function OcclusionEditor({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const sc = scaleRef.current;
+    const d = dprRef.current;
 
+    // Clear at physical pixel resolution, then scale context to logical CSS pixels.
+    // This is the standard fix for blurry canvas on HiDPI / retina screens.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    ctx.setTransform(d, 0, 0, d, 0, 0);
+
+    ctx.drawImage(img, 0, 0, canvas.width / d, canvas.height / d);
 
     for (const z of zoneList) {
       const isSelected = z.id === sel;
@@ -161,7 +179,7 @@ export default function OcclusionEditor({
   useEffect(() => {
     redraw(zones, selectedId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zones, scale, selectedId, imgRevision]);
+  }, [zones, scale, selectedId, imgRevision, dpr]);
 
   function getPos(e: React.MouseEvent<HTMLCanvasElement>) {
     const r = canvasRef.current!.getBoundingClientRect();
@@ -312,9 +330,10 @@ export default function OcclusionEditor({
 
       <canvas
         ref={canvasRef}
-        width={imageWidth * scale}
-        height={imageHeight * scale}
-        className="border rounded-xl w-full"
+        width={Math.round(imageWidth * scale * dpr)}
+        height={Math.round(imageHeight * scale * dpr)}
+        style={{ width: imageWidth * scale, height: imageHeight * scale }}
+        className="border rounded-xl"
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
         onMouseUp={onMouseUp}
