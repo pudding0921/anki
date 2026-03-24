@@ -556,12 +556,6 @@ export default function DashboardPage() {
             >
               Account
             </Link>
-            <button
-              className="text-xs font-medium px-3 py-2 rounded-lg hover:bg-muted transition-colors text-muted-foreground"
-              onClick={() => { localStorage.removeItem("token"); window.location.href = "/login"; }}
-            >
-              Log out
-            </button>
           </div>
         </div>
       </nav>
