@@ -299,32 +299,36 @@ export default function AccountPage() {
               : <>Canceling will end your subscription at the end of the current billing period. You keep access until then.</>
             }
           </p>
-          {sub?.status !== "canceling" && !cancelConfirm ? (
-            <button
-              onClick={() => setCancelConfirm(true)}
-              className="w-fit h-10 px-5 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 font-semibold text-sm transition-colors"
-            >
-              Cancel Subscription
-            </button>
-          ) : sub?.status !== "canceling" ? (
-            <div className="flex flex-col gap-3 p-4 rounded-xl border border-red-500/30 bg-red-500/5">
-              <p className="text-sm text-red-400 font-medium">Are you sure? This cannot be undone.</p>
-              <div className="flex gap-3">
+          {sub?.status !== "canceling" && (
+            <>
+              {!cancelConfirm ? (
                 <button
-                  onClick={handleCancel}
-                  disabled={canceling}
-                  className="h-9 px-4 rounded-lg border border-red-500/40 bg-red-500/20 text-red-400 hover:bg-red-500/30 font-semibold text-sm transition-colors disabled:opacity-60"
+                  onClick={() => setCancelConfirm(true)}
+                  className="w-fit h-10 px-5 rounded-xl border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 font-semibold text-sm transition-colors"
                 >
-                  {canceling ? "Canceling…" : "Yes, cancel my subscription"}
+                  Cancel Subscription
                 </button>
-                <button
-                  onClick={() => setCancelConfirm(false)}
-                  className="h-9 px-4 rounded-lg border border-border hover:bg-muted text-muted-foreground font-semibold text-sm transition-colors"
-                >
-                  Keep my subscription
-                </button>
-              </div>
-            </div>
+              ) : (
+                <div className="flex flex-col gap-3 p-4 rounded-xl border border-red-500/30 bg-red-500/5">
+                  <p className="text-sm text-red-400 font-medium">Are you sure? This cannot be undone.</p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handleCancel}
+                      disabled={canceling}
+                      className="h-9 px-4 rounded-lg border border-red-500/40 bg-red-500/20 text-red-400 hover:bg-red-500/30 font-semibold text-sm transition-colors disabled:opacity-60"
+                    >
+                      {canceling ? "Canceling…" : "Yes, cancel my subscription"}
+                    </button>
+                    <button
+                      onClick={() => setCancelConfirm(false)}
+                      className="h-9 px-4 rounded-lg border border-border hover:bg-muted text-muted-foreground font-semibold text-sm transition-colors"
+                    >
+                      Keep my subscription
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </Section>
       </div>
