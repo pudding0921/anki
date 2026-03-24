@@ -16,102 +16,106 @@ logger = logging.getLogger(__name__)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards. Your job is to find every keyword, key phrase, or vocabulary term per bullet that a student must memorise. You will return each as a short string. Nothing else.
+KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards for pre-health university students (biology, chemistry, biochemistry, anatomy, physiology, pharmacology, microbiology, genetics, pathology). Your job is to extract every keyword, key phrase, or vocabulary term a student MUST memorise from the slide body text below. Return only those terms, nothing else.
 
 NEVER OCCLUDE THE SLIDE TITLE: {title}
 
 ══════════════════════════════════════════════════════
-  THE FILL-IN-THE-BLANK TEST  (apply this to every term before returning it)
+  THE FILL-IN-THE-BLANK TEST  (apply before every term)
 ══════════════════════════════════════════════════════
 Replace your chosen term with a blank in the original sentence.
-Ask yourself: does the remaining text form a readable question that has exactly ONE missing answer?
+Does the remaining text form a clear question with exactly ONE correct answer?
 
-  PASS ✓  "A ________ is a C++ construct that groups variables together."
-           → you returned "struct" — student knows what to recall
-  FAIL ✗  "________________________________________" (nothing left)
-           → you returned the entire bullet — student sees nothing
-
-If the remaining text is empty, meaningless, or less than 4 words, your term is TOO LONG. Shorten it.
+  PASS ✓  "________ is the anaerobic breakdown of glucose to pyruvate."
+           → you returned "Glycolysis" — student knows what to recall
+  PASS ✓  "Metformin inhibits ________ via AMPK activation."
+           → you returned "hepatic glucose production" — clear question remains
+  FAIL ✗  "________ inhibits ________ via ________ activation."
+           → too many blanks — you chose too many terms from one bullet
+  FAIL ✗  "________________________________________" (sentence becomes empty)
+           → your term was the entire bullet — shorten it
 
 ══════════════════════════════════════════════════════
   ABSOLUTE HARD RULES
 ══════════════════════════════════════════════════════
-R1. MAXIMUM 4 WORDS per term. Shorter is better, but multi-word key phrases are allowed.
-R2. Your term MUST NOT be a full sentence or clause. Do NOT return terms containing ALL of:
-      subject + verb + object together (that is a sentence, not a term).
-      Avoid pure filler starts: "the a an that which does do not to of in and or but"
-R3. Never return the slide title or any individual word from it.
-R4. A specific verb that IS the vocabulary word is fine (e.g. "inhibits", "phosphorylates", "synthesizes"). Do NOT return generic verbs ("is", "uses", "creates", "includes").
-R5. Return ONE term per key concept in each bullet. Aim for 3–8 terms total — cover ALL important vocabulary, not just one per bullet.
-R6. NEVER return example variable names, parameter names, or constant names used as mere illustrations in code (e.g. MONDAY, TUESDAY, x, arr, i, Node, Day, myVar). These are placeholders — focus on the keyword, syntax element, or concept instead.
+R1. MAXIMUM 4 WORDS per term. 1–2 words ideal; multi-word science phrases up to 4 words allowed.
+R2. NEVER return a full sentence or clause (subject + verb + object together).
+    Do NOT start a term with: "the", "a", "an", "that", "which", "does", "do", "not", "and", "or"
+R3. NEVER return the slide title or any word from it.
+R4. ALWAYS return chemical names, drug names, gene names, enzyme names, structure names, values.
+R5. Return 3–8 terms total. Cover ALL important vocabulary — multiple terms per bullet if needed.
+R6. Greek letters (alpha, beta, gamma, delta, etc.) ARE valid science terms — include them.
+R7. Chemical formulas and notation (CO2, H2O, Na+, ATP, NADH, ~P, ΔG) ARE valid — always return them.
 
 ══════════════════════════════════════════════════════
-  PATTERN GUIDE — how to handle every bullet type
+  PATTERN GUIDE — science subjects (primary audience)
 ══════════════════════════════════════════════════════
 
-PATTERN 1 — "Term: full definition after the colon"
-  Bullet:   "Structure: C++ construct that allows multiple variables to be grouped together"
-  ✓ Return: "struct"           ← the term before the colon (or its canonical name)
-  ✗ Never:  "C++ construct that allows multiple variables to be grouped together"
-  ✗ Never:  "C++ construct"
-  ✗ Never:  "grouped together"
+PATTERN 1 — "Term: definition" (biology/biochem definition slide)
+  Bullet:   "Glycolysis: anaerobic breakdown of glucose to produce ATP and pyruvate"
+  ✓ Return: "Glycolysis", "ATP", "pyruvate"
+  ✗ Never:  "anaerobic breakdown of glucose to produce ATP and pyruvate"
 
-PATTERN 2 — "Subject verb/does KEYWORD or has KEYWORD"
-  Bullet:   "struct declaration does not allocate memory or create variables"
-  ✓ Return: "memory"           ← the key noun that is the answer
-  ✗ Never:  "struct declaration does not allocate memory or create variables"
-  ✗ Never:  "does not allocate"
-  ✗ Never:  "allocate memory"
+PATTERN 2 — Drug / molecule + mechanism
+  Bullet:   "Metformin inhibits hepatic glucose production via AMPK activation"
+  ✓ Return: "Metformin", "AMPK"
+  Bullet:   "Beta-2 agonists cause bronchodilation by relaxing airway smooth muscle"
+  ✓ Return: "Beta-2 agonists", "bronchodilation"
 
-PATTERN 3 — "To do X, use Y as Z"
-  Bullet:   "To define variables, use structure tag as type name"
-  ✓ Return: "structure tag"    ← the specific technique/term being taught
-  ✗ Never:  "To define variables, use structure tag as type name"
-  ✗ Never:  "use structure tag as type name"
-  ✗ Never:  "type name"        (too vague)
+PATTERN 3 — Anatomical structure + function
+  Bullet:   "The sinoatrial node generates electrical impulses at 60–100 bpm"
+  ✓ Return: "sinoatrial node", "60–100 bpm"
+  Bullet:   "Bowman's capsule surrounds the glomerulus and filters blood"
+  ✓ Return: "Bowman's capsule", "glomerulus"
 
-PATTERN 4 — Code examples with enum / constant / variable names
-  Bullet:   "enum Day {{ MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY }};"
-  ✓ Return: "enum"             ← the language keyword being taught
-  ✗ Never:  "MONDAY", "TUESDAY", "WEDNESDAY", "Day", etc.
-  WHY: In CS/programming slides, the specific names used in examples (MONDAY, x, arr, Node)
-       are just illustrative placeholders — a student does NOT need to recall them.
-       Always hide the KEYWORD or SYNTAX ELEMENT, never the example names.
+PATTERN 4 — Chemical / reaction
+  Bullet:   "Carboxylic acids contain a carboxyl functional group (-COOH)"
+  ✓ Return: "carboxyl", "-COOH"
+  Bullet:   "SN2 reaction proceeds with inversion of configuration (Walden inversion)"
+  ✓ Return: "SN2", "inversion of configuration"
 
-PATTERN 5 — "Items are called CONCEPT"
-  Bullet:   "The identifiers MONDAY, TUESDAY are enumerators that represent values"
-  ✓ Return: "enumerators"      ← the concept name being defined
-  ✗ Never:  "MONDAY", "TUESDAY", "identifiers MONDAY"
-  WHY: The example identifiers (MONDAY etc.) are not the answer — "enumerators" is.
+PATTERN 5 — Threshold / lab value / clinical number
+  Bullet:   "HbA1c > 6.5% confirms a diagnosis of type 2 diabetes"
+  ✓ Return: "HbA1c > 6.5%", "type 2 diabetes"
+  Bullet:   "Normal fasting glucose: 70–100 mg/dL; prediabetes: 100–125 mg/dL"
+  ✓ Return: "70–100 mg/dL", "100–125 mg/dL"
 
-PATTERN 6 — Medical / science "drug/gene MECHANISM"
-  Bullet:   "metformin inhibits hepatic glucose production"
-  ✓ Return: "metformin"        ← the specific agent
-  ✗ Never:  "inhibits hepatic glucose production"
-  ✗ Never:  "metformin inhibits"
+PATTERN 6 — Cell type / tissue / organelle
+  Bullet:   "Chief cells secrete pepsinogen; parietal cells secrete HCl and intrinsic factor"
+  ✓ Return: "Chief cells", "pepsinogen", "parietal cells", "HCl", "intrinsic factor"
 
-PATTERN 7 — Threshold / value
-  Bullet:   "HbA1c > 6.5% confirms a diagnosis of diabetes"
-  ✓ Return: "HbA1c > 6.5%"    ← the specific value (this is short enough)
-  ✗ Never:  "confirms a diagnosis of diabetes"
+PATTERN 7 — Genetics / molecular biology
+  Bullet:   "BRCA1 and BRCA2 mutations increase risk of breast and ovarian cancer"
+  ✓ Return: "BRCA1", "BRCA2"
+  Bullet:   "mRNA is translated 5' → 3' by ribosomes in the cytoplasm"
+  ✓ Return: "5' → 3'", "ribosomes"
 
-PATTERN 8 — Generic heading with no testable answer
-  Bullet:   "General Format:"  or  "Example:"  or  "Note:"
-  ✓ Return: nothing — skip this bullet entirely, it has no answer to hide
+PATTERN 8 — Pathway step / enzyme
+  Bullet:   "Pyruvate decarboxylase converts pyruvate to acetyl-CoA in the mitochondria"
+  ✓ Return: "Pyruvate decarboxylase", "acetyl-CoA"
+
+PATTERN 9 — Heading with no testable answer
+  Bullet:   "Overview:", "Key points:", "Note:", "Example:"
+  ✓ Return: nothing — skip headings with no specific answer to recall
+
+PATTERN 10 — Programming / CS (if slide is CS, not science)
+  Bullet:   "enum Day {{ MONDAY, TUESDAY, WEDNESDAY }};"
+  ✓ Return: "enum"  ← the keyword being taught, NEVER example names like MONDAY
 
 ══════════════════════════════════════════════════════
   QUICK SELF-CHECK before returning each term
 ══════════════════════════════════════════════════════
-  □ Is it 1–2 words?                                   must be YES
-  □ Does it contain any word from the banned list R2?  must be NO
-  □ If I blank it out, does a readable question remain? must be YES
-  □ Is it specific and testable (not vague like "format" or "type")? must be YES
+  □ Is it 1–4 words?                                         must be YES
+  □ Does it start with a banned filler word (R2)?            must be NO
+  □ If I blank it out, does a readable question remain?      must be YES
+  □ Is it a specific, testable science/medical term?         must be YES
+  □ Did I include ALL chemical names, drug names, lab values? must be YES
 {checklist_section}
 ════ SLIDE BODY TEXT (title already removed) ════
 {body_text}
 
 Return ONLY a valid JSON array of short strings. No markdown, no explanation, no extra text:
-["term1", "term2"]"""
+["term1", "term2", "term3"]"""
 
 CHECKLIST_SECTION = "\n━━ Study checklist — prioritize terms related to these topics ━━\n{checklist}\n"
 
@@ -341,7 +345,6 @@ _EXAMPLE_IDENTIFIER_NAMES = {
     "open", "closed", "pending", "active", "inactive",
     "male", "female",
     "first", "second", "third",
-    "alpha", "beta", "gamma", "delta",
     "start", "stop", "begin", "end",
     "on", "off",
     "plus", "minus",
@@ -364,8 +367,6 @@ _SENTENCE_FRAGMENT_WORDS = {
     "create", "creates", "created",
     "include", "includes", "including",
     "refer", "refers", "referred",
-    "allocate", "store", "stores", "stored",
-    "group", "groups", "grouped",
 }
 
 
@@ -405,8 +406,6 @@ def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) 
         "create", "creates", "created",
         "include", "includes", "including",
         "refer", "refers", "referred",
-        "allocate", "store", "stores", "stored",
-        "group", "groups", "grouped",
     }
 
     filtered = []

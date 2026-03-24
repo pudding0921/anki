@@ -8,6 +8,17 @@ const nextConfig: NextConfig = {
   ...(process.env.NODE_ENV === "development" && {
     turbopack: { root: __dirname },
   }),
+  async headers() {
+    return [
+      {
+        // Prevent browsers from caching API responses
+        source: "/api/:path*",
+        headers: [
+          { key: "Cache-Control", value: "no-store, max-age=0" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
