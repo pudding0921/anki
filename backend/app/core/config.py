@@ -26,8 +26,13 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "llama3.2"
     CARD_COUNT: int = 10
 
-    # File storage
+    # File storage (local fallback)
     UPLOAD_DIR: str = "uploads"
+
+    # Supabase Storage (persistent image hosting)
+    SUPABASE_URL: str = ""
+    SUPABASE_SERVICE_KEY: str = ""
+    SUPABASE_BUCKET: str = "card-images"
 
     # Admin
     ADMIN_SECRET: str = ""

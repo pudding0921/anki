@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState, useRef, forwardRef, useImperativeHandle } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { apiFetch, API_URL } from "@/lib/api";
+import { apiFetch, imgUrl } from "@/lib/api";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import OcclusionEditor, { Zone as EditorZone } from "@/components/OcclusionEditor";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -190,7 +190,7 @@ function OcclusionCardEditor({
       </div>
 
       <OcclusionEditor
-        imageUrl={`${API_URL}${card.image_path}`}
+        imageUrl={imgUrl(card.image_path)}
         imageWidth={imgW}
         imageHeight={imgH}
         initialZones={initialZones}

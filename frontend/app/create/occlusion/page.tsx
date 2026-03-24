@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { API_URL, apiFetch } from "@/lib/api";
+import { API_URL, apiFetch, imgUrl } from "@/lib/api";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import OcclusionEditor, { type Zone } from "@/components/OcclusionEditor";
 
@@ -317,7 +317,7 @@ export default function OcclusionPage() {
                 </div>
                 <OcclusionEditor
                   key={card.id}
-                  imageUrl={`${API_URL}${card.image_path}`}
+                  imageUrl={imgUrl(card.image_path)}
                   imageWidth={card.image_width}
                   imageHeight={card.image_height}
                   initialZones={card.occlusion_zones.map((z) => ({

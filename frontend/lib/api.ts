@@ -1,6 +1,16 @@
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/**
+ * Resolve an image path to a full URL.
+ * Supabase Storage paths are already absolute (https://...); local paths need API_URL prepended.
+ */
+export function imgUrl(path: string | null | undefined): string {
+  if (!path) return "";
+  if (path.startsWith("http")) return path;
+  return `${API_URL}${path}`;
+}
+
 function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("token");

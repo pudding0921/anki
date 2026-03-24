@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { apiFetch, API_URL } from "@/lib/api";
+import { apiFetch, imgUrl } from "@/lib/api";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 
 interface OcclusionZone {
@@ -54,7 +54,7 @@ function OcclusionCard({ card, revealedCount }: { card: Card; revealedCount: num
     <div ref={containerRef} className="w-full max-w-2xl">
       <div style={{ width: imgW * scale, height: imgH * scale, position: "relative" }} className="mx-auto rounded-2xl overflow-hidden shadow-2xl">
         <img
-          src={`${API_URL}${card.image_path}`}
+          src={imgUrl(card.image_path)}
           alt="slide"
           style={{ width: imgW * scale, height: imgH * scale }}
           className="block"

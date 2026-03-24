@@ -32,6 +32,7 @@ class ZonesReplaceRequest(BaseModel):
 from app.services.llm import generate_flashcards
 from app.services.ocr import extract_text
 from app.services.ai_occlusion import zones_for_pdf_page, zones_for_image, diagram_cards_for_pdf_page
+from app.services.storage import upload_file as storage_upload
 
 router = APIRouter(prefix="/cards", tags=["cards"])
 
@@ -75,7 +76,10 @@ async def generate_cards(
             f.write(content)
 
         if first_image_path is None and ext != ".pdf":
-            first_image_path = f"/uploads/{current_user.id}/{saved_name}"
+            local_img_path = f"/uploads/{current_user.id}/{saved_name}"
+            img_ct = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+            supabase_img_url = storage_upload(content, f"{current_user.id}/{saved_name}", img_ct)
+            first_image_path = supabase_img_url or local_img_path
 
         text = extract_text(content, fname)
         if text:
@@ -127,9 +131,15 @@ async def upload_pages(
             for i, page in enumerate(doc):
                 pix = page.get_pixmap(matrix=mat)
                 img_name = f"{uuid.uuid4()}.png"
-                pix.save(os.path.join(user_dir, img_name))
+                img_abs = os.path.join(user_dir, img_name)
+                pix.save(img_abs)
+                local_path = f"/uploads/{current_user.id}/{img_name}"
+                # Upload to persistent storage if configured
+                with open(img_abs, "rb") as f:
+                    img_bytes = f.read()
+                supabase_url = storage_upload(img_bytes, f"{current_user.id}/{img_name}")
                 pages.append({
-                    "image_path": f"/uploads/{current_user.id}/{img_name}",
+                    "image_path": supabase_url or local_path,
                     "width": pix.width,
                     "height": pix.height,
                     "page": i + 1,
@@ -149,8 +159,11 @@ async def upload_pages(
             w, h = img.size
         except Exception:
             w, h = 800, 600
+        local_path = f"/uploads/{current_user.id}/{img_name}"
+        content_type = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+        supabase_url = storage_upload(content, f"{current_user.id}/{img_name}", content_type)
         pages.append({
-            "image_path": f"/uploads/{current_user.id}/{img_name}",
+            "image_path": supabase_url or local_path,
             "width": w,
             "height": h,
             "page": 1,
@@ -236,13 +249,25 @@ async def batch_occlusion(
                         "image_path": image_path, "img_w": img_w, "img_h": img_h,
                         "zones": [], "diagram_specs": []}
         else:
-            abs_path = _resolve_upload_path(image_path)
-            if not os.path.exists(abs_path):
-                return {"page": page_num, "status": "error", "reason": "file not found",
-                        "image_path": image_path, "img_w": img_w, "img_h": img_h,
-                        "zones": [], "diagram_specs": []}
-            with open(abs_path, "rb") as f:
-                image_bytes = f.read()
+            # image_path may be a Supabase URL (https://...) or local path (/uploads/...)
+            if image_path.startswith("http"):
+                import requests as _requests
+                try:
+                    r = _requests.get(image_path, timeout=30)
+                    r.raise_for_status()
+                    image_bytes = r.content
+                except Exception as e:
+                    return {"page": page_num, "status": "error", "reason": f"could not fetch image: {e}",
+                            "image_path": image_path, "img_w": img_w, "img_h": img_h,
+                            "zones": [], "diagram_specs": []}
+            else:
+                abs_path = _resolve_upload_path(image_path)
+                if not os.path.exists(abs_path):
+                    return {"page": page_num, "status": "error", "reason": "file not found",
+                            "image_path": image_path, "img_w": img_w, "img_h": img_h,
+                            "zones": [], "diagram_specs": []}
+                with open(abs_path, "rb") as f:
+                    image_bytes = f.read()
             zones = zones_for_image(image_bytes, img_w, img_h, checklist_text=checklist_text)
 
         return {
@@ -310,7 +335,10 @@ async def batch_occlusion(
             diag_name = f"{uuid.uuid4()}.{diag_ext}"
             with open(os.path.join(user_dir, diag_name), "wb") as f:
                 f.write(spec["image_bytes"])
-            diag_image_path = f"/uploads/{current_user.id}/{diag_name}"
+            local_diag_path = f"/uploads/{current_user.id}/{diag_name}"
+            diag_ct = "image/jpeg" if diag_ext in ("jpg", "jpeg") else "image/png"
+            supabase_diag_url = storage_upload(spec["image_bytes"], f"{current_user.id}/{diag_name}", diag_ct)
+            diag_image_path = supabase_diag_url or local_diag_path
             diag_card = Card(
                 deck_id=deck.id,
                 card_type="occlusion",
