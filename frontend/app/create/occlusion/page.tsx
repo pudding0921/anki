@@ -43,7 +43,7 @@ export default function OcclusionPage() {
   const [step, setStep] = useState<Step>("upload");
   const [error, setError] = useState("");
   const [pageCount, setPageCount] = useState(0);
-  const [results, setResults] = useState<{ created: number; skipped: number; results: PageResult[] }>({
+  const [results, setResults] = useState<{ created: number; skipped: number; results: PageResult[]; deckId?: number }>({
     created: 0, skipped: 0, results: [],
   });
 
@@ -85,7 +85,7 @@ export default function OcclusionPage() {
       });
       if (!batchRes.ok) { const d = await batchRes.json().catch(() => ({})); throw new Error(d.detail || "AI processing failed"); }
       const data = await batchRes.json();
-      setResults(data);
+      setResults({ ...data, deckId: data.deck_id });
 
       // Step 3: Load cards for review
       if (data.deck_id) {
@@ -381,13 +381,36 @@ export default function OcclusionPage() {
               ))}
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex gap-3 flex-wrap">
               <Button onClick={() => router.push("/dashboard")}>Go to dashboard</Button>
+              {results.created > 0 && results.deckId && (
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    const token = localStorage.getItem("token");
+                    const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+                    const deckRes = await fetch(`${API_URL}/api/decks/${results.deckId}`, { headers: authHeader });
+                    if (deckRes.ok) {
+                      const deck = await deckRes.json();
+                      const cards: ReviewCard[] = (deck.cards ?? []).filter((c: ReviewCard & { card_type: string }) => c.card_type === "occlusion");
+                      if (cards.length > 0) {
+                        setReviewCards(cards);
+                        setSavedCardIds(new Set());
+                        setStep("reviewing");
+                        return;
+                      }
+                    }
+                    alert("Could not load cards for review. Go to Dashboard → edit the deck instead.");
+                  }}
+                >
+                  Review &amp; edit zones
+                </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={() => {
                   setStep("upload");
-                  setResults({ created: 0, skipped: 0, results: [] });
+                  setResults({ created: 0, skipped: 0, results: [], deckId: undefined });
                   setPageCount(0);
                   setChecklistFile(null);
                   setReviewCards([]);
