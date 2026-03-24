@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.models import Card, Deck, Review
 from app.schemas.schemas import ReviewCreate, ReviewOut
-from app.core.deps import get_current_user
+from app.core.deps import get_active_user
 from app.services.sm2 import apply_sm2
 
 router = APIRouter(prefix="/api/study", tags=["study"])
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/study", tags=["study"])
 def get_due_cards(
     deck_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_active_user),
 ):
     deck = db.query(Deck).filter(Deck.id == deck_id, Deck.user_id == current_user.id, Deck.deleted_at == None).first()
     if not deck:
@@ -34,7 +34,7 @@ def get_due_cards(
 def submit_review(
     payload: ReviewCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_active_user),
 ):
     card = (
         db.query(Card)

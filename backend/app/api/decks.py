@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
+from app.core.deps import get_active_user
 from app.database import get_db
 from app.models.models import Card, Deck, User
 from app.schemas.schemas import DeckCreate, DeckOut, DeckWithCards
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/decks", tags=["decks"])
 @router.post("", response_model=DeckOut, status_code=status.HTTP_201_CREATED)
 def create_deck(
     payload: DeckCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     deck = Deck(
@@ -50,7 +50,7 @@ def create_deck(
 
 @router.get("", response_model=List[DeckOut])
 def list_decks(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     decks = (
@@ -86,7 +86,7 @@ def list_decks(
 @router.get("/{deck_id}", response_model=DeckWithCards)
 def get_deck(
     deck_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     deck = (
@@ -107,7 +107,7 @@ def get_deck(
 @router.delete("/{deck_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_deck(
     deck_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     deck = (

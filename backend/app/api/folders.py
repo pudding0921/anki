@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
+from app.core.deps import get_active_user
 from app.database import get_db
 from app.models.models import Deck, Folder, User
 from app.schemas.schemas import FolderCreate, FolderOut
@@ -24,7 +24,7 @@ class MoveDeckRequest(BaseModel):
 
 @router.get("", response_model=List[FolderOut])
 def list_folders(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     folders = (
@@ -58,7 +58,7 @@ def list_folders(
 @router.post("", response_model=FolderOut, status_code=201)
 def create_folder(
     payload: FolderCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     folder = Folder(
@@ -81,7 +81,7 @@ def create_folder(
 def rename_folder(
     folder_id: int,
     payload: FolderRename,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     folder = (
@@ -106,7 +106,7 @@ def rename_folder(
 @router.delete("/{folder_id}", status_code=204)
 def delete_folder(
     folder_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     folder = (
@@ -126,7 +126,7 @@ def delete_folder(
 def move_deck(
     deck_id: int,
     payload: MoveDeckRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     deck = (

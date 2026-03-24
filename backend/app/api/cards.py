@@ -10,12 +10,13 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.deps import get_current_user
+from app.core.deps import get_active_user, get_current_user
+from app.core.limiter import limiter
 from app.database import get_db
 from app.models.models import Card, Deck, OcclusionZone, User
 from app.schemas.schemas import CardOut, GenerateCardsResponse, OcclusionCardCreate, OcclusionZoneCreate
@@ -47,10 +48,12 @@ def _resolve_upload_path(image_path: str) -> str:
 
 
 @router.post("/generate", response_model=GenerateCardsResponse)
+@limiter.limit("10/hour")
 async def generate_cards(
+    request: Request,
     files: List[UploadFile] = File(...),
     card_count: int = Form(10),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     user_dir = os.path.join(_ABS_UPLOAD_DIR, str(current_user.id))
@@ -91,9 +94,11 @@ async def generate_cards(
 
 
 @router.post("/upload-pages")
+@limiter.limit("20/hour")
 async def upload_pages(
+    request: Request,
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
 ):
     """Upload an image or PDF. Returns list of rendered page images."""
     content = await file.read()
@@ -155,11 +160,13 @@ async def upload_pages(
 
 
 @router.post("/batch-occlusion")
+@limiter.limit("10/hour")
 async def batch_occlusion(
+    request: Request,
     deck_name: str = Form(...),
     pages_json: str = Form(...),   # JSON: [{image_path, width, height, page, source_pdf?}]
     checklist_file: Optional[UploadFile] = File(None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -338,7 +345,7 @@ async def batch_occlusion(
 @router.post("/occlusion", response_model=CardOut)
 def create_occlusion_card(
     payload: OcclusionCardCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     deck = (
@@ -382,7 +389,7 @@ def create_occlusion_card(
 def replace_card_zones(
     card_id: int,
     payload: ZonesReplaceRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     """Replace all occlusion zones for a card with a new set."""
@@ -416,7 +423,7 @@ def replace_card_zones(
 def update_card(
     card_id: int,
     payload: CardUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     card = (
@@ -437,7 +444,7 @@ def update_card(
 @router.delete("/zones/{zone_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_zone(
     zone_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     zone = (
@@ -456,7 +463,7 @@ def delete_zone(
 @router.delete("/{card_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_card(
     card_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_active_user),
     db: Session = Depends(get_db),
 ):
     card = (

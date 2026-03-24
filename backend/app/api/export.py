@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import Card, Deck
-from app.core.deps import get_current_user
+from app.core.deps import get_active_user
 from app.services.anki_export import export_deck_to_apkg
 
 router = APIRouter(prefix="/api/decks", tags=["export"])
@@ -22,7 +22,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 def export_deck(
     deck_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_active_user),
 ):
     deck = db.query(Deck).filter(Deck.id == deck_id, Deck.user_id == current_user.id, Deck.deleted_at == None).first()
     if not deck:
