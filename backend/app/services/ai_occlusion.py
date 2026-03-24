@@ -117,116 +117,142 @@ CHECKLIST_SECTION = "\n━━ Study checklist — prioritize terms related to th
 
 VISION_PROMPT = (
     "You are building Anki image-occlusion flashcards from a slide image. "
-    "Find 3–8 keywords and key phrases to hide — cover ALL important vocabulary, terms, values, and named concepts.\n\n"
+    "Find 1–10 keywords and key phrases to hide. Cover ALL important vocabulary, terms, values, "
+    "diagram labels, and named concepts. Even 1 box is better than none.\n\n"
 
-    "FILL-IN-THE-BLANK TEST (apply before every box you draw):\n"
+    "PRIORITY — ALWAYS box these if present:\n"
+    "  • Labels on anatomical diagrams, charts, or figures (e.g. 'aorta', 'mitral valve', 'axon')\n"
+    "  • Text connected to a diagram by arrows or callout lines\n"
+    "  • Numerical values, thresholds, percentages (e.g. 'HbA1c > 6.5%', '120/80 mmHg')\n"
+    "  • Drug names, gene names, protein names, pathogen names\n"
+    "  • Anatomical structure names, cell types, tissue types\n"
+    "  • Medical/scientific terms that students must memorise\n\n"
+
+    "FILL-IN-THE-BLANK TEST (for text bullets only):\n"
     "  Replace your chosen term with a blank. Does the rest of the sentence still form a readable question? "
-    "If yes → good pick. If the sentence becomes empty or unreadable → your box is too large.\n\n"
+    "If yes → good pick. If the sentence becomes empty → your box is too large.\n\n"
 
     "HARD RULES:\n"
-    "  • 1–4 words per box — single words preferred, but key phrases up to 4 words are allowed\n"
-    "  • NEVER cover the slide title or heading (largest/boldest text)\n"
-    "  • NEVER cover a full sentence or clause\n"
-    "  • Cover: specific nouns, named concepts, vocab terms, values, key phrases, specific verbs that ARE the vocabulary\n\n"
+    "  • 1–4 words per box — single words preferred, key phrases up to 4 words allowed\n"
+    "  • NEVER cover the slide title / heading (largest text)\n"
+    "  • NEVER cover a full sentence\n"
+    "  • NEVER cover generic filler words (is, are, the, a, an, etc.)\n\n"
 
-    "PATTERN EXAMPLES:\n"
-    "  Bullet 'Structure: C++ construct that groups variables' → box over 'struct' only\n"
-    "  Bullet 'declaration does not allocate memory' → box over 'memory' only\n"
-    "  Bullet 'identifiers MONDAY TUESDAY are enumerators' → box over 'enumerators' only\n"
-    "  Bullet 'metformin inhibits glucose production' → box over 'metformin' AND 'hepatic glucose production'\n"
-    "  Bullet 'HbA1c > 6.5% confirms diabetes diagnosis' → box over 'HbA1c > 6.5%'\n"
-    "  Bullet 'photosynthesis occurs in the chloroplast' → box over 'photosynthesis' AND 'chloroplast'\n"
-    "  Code 'enum Day { MONDAY, TUESDAY, FRIDAY };' → box over 'enum' only — NEVER the example names\n"
-    "  Heading 'General Format:' → DO NOT box anything here\n\n"
-    "CS/PROGRAMMING RULE: In code examples, NEVER box example variable names, parameter names, "
-    "constant names, or type names used as mere illustrations (e.g. MONDAY, x, arr, Node, Day). "
-    "These are placeholders, not what students need to recall. Box the KEYWORD or CONCEPT instead.\n\n"
+    "EXAMPLES:\n"
+    "  Diagram label 'Left Ventricle' near heart → box over 'Left Ventricle'\n"
+    "  Arrow pointing to structure labelled 'Purkinje fibers' → box 'Purkinje fibers'\n"
+    "  Bullet 'metformin inhibits hepatic glucose production' → box 'metformin'\n"
+    "  Bullet 'HbA1c > 6.5% confirms diabetes' → box 'HbA1c > 6.5%'\n"
+    "  Bullet 'photosynthesis occurs in chloroplast' → box 'photosynthesis' AND 'chloroplast'\n\n"
 
     "Bounding box: fraction of image (0.0–1.0). x,y = top-left. w,h = size. "
-    "Box must be tight around the term only — not the whole line.\n"
+    "Box must be TIGHT around the term only — not the whole line.\n"
     'Return ONLY valid JSON, no markdown:\n[{"label":"term","x":0.1,"y":0.2,"w":0.05,"h":0.03}]'
 )
 
 ANKIFLOW_VISION_PROMPT = """You are building Anki image-occlusion flashcards from a study slide image.
+This slide may contain text bullets, anatomical diagrams, medical images, charts, or figures.
 
 ═══════════════════════════════════════════
 STEP 1 — IDENTIFY THE TITLE (NEVER BOX THIS)
 ═══════════════════════════════════════════
-The title is the largest or boldest text, usually at the top. Record it as master_topic.
+The title is the largest or boldest text at the top. Record it as master_topic.
 Do NOT place any occlusion box on the title or any word in it.
 
 ═══════════════════════════════════════════
-STEP 2 — FIND KEYWORDS TO BOX
+STEP 2 — FIND EVERYTHING TO BOX (1–10 items)
 ═══════════════════════════════════════════
-You are looking for 3–8 keywords and key phrases — the ANSWERS a student must recall.
-Each box covers 1–4 words. Single words preferred, but multi-word key phrases are allowed.
+Box 1–10 terms. Even 1 zone is valuable. DO NOT return empty cards — find SOMETHING.
 
-FILL-IN-THE-BLANK TEST — apply this before drawing every box:
-  Take the bullet text. Replace your chosen word with a blank.
-  Does the remaining text form a clear, readable question?
-    YES → correct pick.
-    NO (sentence is now empty or has fewer than 5 words left) → your box is too big. Pick a shorter word.
+── PRIORITY 1: Diagram and Image Labels (always box these first) ──
+If the slide contains any diagram, figure, anatomical image, chart, or photo:
+  • Box EVERY visible label that names a structure, component, or part
+  • Box ALL text connected to the image by arrows, lines, or callouts
+  • Box text positioned next to or around the image that identifies parts
+  • Box every anatomical structure name (e.g. "aorta", "mitral valve", "hippocampus")
+  • Box every cell/tissue type label (e.g. "hepatocyte", "Purkinje fiber", "goblet cell")
+  • Box every pathological finding name (e.g. "Mallory bodies", "Reed-Sternberg cells")
+  • Box every numbered or lettered label that identifies diagram components
+  CRITICAL: If there is a diagram, you MUST find at least 1 label. Look harder.
 
-EXAMPLES OF CORRECT picks:
-  Bullet "Structure: C++ construct that allows variables to be grouped together"
-    → box over "struct" only
-    → remaining text: "________: C++ construct that allows variables to be grouped together" ✓
+── PRIORITY 2: Medical/Science Key Terms ──
+  • Drug names, drug classes, mechanisms of action
+  • Gene names, protein names, enzyme names, receptor names
+  • Disease names, syndrome names, pathogen names
+  • Numerical thresholds and values (e.g. "HbA1c > 6.5%", "120/80 mmHg", "CD4 < 200")
+  • Pathway names, process names
 
-  Bullet "struct declaration does not allocate memory or create variables"
-    → box over "memory" only
-    → remaining text: "struct declaration does not allocate _______ or create variables" ✓
+── PRIORITY 3: Text Bullet Keywords ──
+  For each bullet point, apply the fill-in-the-blank test:
+  Replace your chosen word with a blank — does a readable question remain?
+    YES → box it.   NO (sentence becomes empty) → pick a shorter term.
 
-  Bullet "To define variables, use structure tag as type name"
-    → box over "structure tag"
-    → remaining text: "To define variables, use _____________ as type name" ✓
+EXAMPLES:
+  Heart diagram with arrows → box "left ventricle", "aortic valve", "chordae tendineae"
+  Brain diagram with labels → box "hippocampus", "amygdala", "corpus callosum"
+  Pathology image with caption "Reed-Sternberg cells" → box "Reed-Sternberg cells"
+  Bullet "metformin inhibits hepatic glucose production" → box "metformin"
+  Bullet "HbA1c > 6.5% confirms diabetes" → box "HbA1c > 6.5%"
+  Bullet "photosynthesis occurs in the chloroplast" → box "photosynthesis" AND "chloroplast"
 
-  Bullet "The identifiers MONDAY, TUESDAY, WEDNESDAY are enumerators"
-    → box over "enumerators" only
-    → remaining text: "The identifiers MONDAY, TUESDAY, WEDNESDAY are ___________" ✓
-
-  Bullet "metformin inhibits hepatic glucose production"
-    → box over "metformin" only
-    → remaining text: "__________ inhibits hepatic glucose production" ✓
-
-  Enum code "enum Day { MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY };"
-    → box over "enum" only (the keyword being taught)
-    → NEVER box MONDAY, TUESDAY, Day, or any other example names — they are illustrative only
-
-EXAMPLES OF WRONG picks — never do these:
-  ✗ "C++ construct that allows multiple variables to be grouped together" — entire definition, 9 words
-  ✗ "struct declaration does not allocate memory" — whole sentence
-  ✗ "does not allocate memory or create variables" — verb phrase
-  ✗ "To define variables use structure tag as type name" — instruction sentence
-  ✗ "variables to be grouped together" — phrase with filler words
-  ✗ "General Format:" — heading with no answer to test
-  ✗ "Example:" — heading, skip it
-
-HARD RULES:
-  • 1–4 words per box — key phrases allowed, single words preferred
-  • NEVER box full sentences or clauses
-  • NEVER box pure filler: "is are was the a an that which does do not and or but"
-  • NEVER box the title / heading
-  • NEVER box example variable names, parameter names, or constant names used as illustrations in code (e.g. MONDAY, x, arr, Node, i, Day) — box the keyword or concept instead
-  • 3–8 boxes per slide — cover ALL important vocabulary and key phrases. Dense premed/science slides may need more.
-  • Multi-word medical/scientific key phrases up to 4 words are explicitly allowed (e.g. "hepatic glucose production", "loss of function", "type 2 diabetes")
+NEVER box:
+  • The slide title / main heading
+  • Full sentences or clauses (more than 4 words that form a complete thought)
+  • Pure filler: is, are, was, the, a, an, that, which, and, or, but
+  • Code example variable/constant names used as mere illustrations (MONDAY, x, arr, i)
 
 ═══════════════════════════════════════════
 STEP 3 — OUTPUT (strict JSON, no markdown)
 ═══════════════════════════════════════════
 Bounding box: [ymin, xmin, ymax, xmax] on 0–1000 scale.
-Box must be TIGHT around the single keyword — not the whole line.
+Box must be TIGHT around the keyword/label only.
 
 {
   "master_topic": "slide title here",
   "cards": [
     {
       "type": "IMAGE_OCCLUSION",
-      "occlusion_label": "exact single keyword",
+      "occlusion_label": "exact term or label",
       "bounding_box": [ymin, xmin, ymax, xmax],
-      "context_hint": "one phrase of context"
+      "context_hint": "what this labels or means"
     }
   ]
 }"""
+
+
+DIAGRAM_VISION_PROMPT = """You are analyzing a medical or scientific diagram, figure, or image to build Anki image-occlusion flashcards.
+
+YOUR ONLY JOB: Find every text label visible in or around this image and box it.
+
+WHAT TO BOX — find ALL of these:
+  1. Labels that name anatomical structures (e.g. "aorta", "left atrium", "Bowman's capsule")
+  2. Text at the end of arrows or callout lines pointing to parts of the diagram
+  3. Numbered or lettered labels that identify components (e.g. "1", "A" near a structure)
+  4. Layer names, region names, zone names in the diagram
+  5. Cell types, tissue types, organelle names
+  6. Any pathological finding name or disease feature label
+  7. Drug target names, receptor labels, enzyme names
+  8. Any other text that identifies or names a visible structure
+
+IMPORTANT:
+  • You MUST find at least 1 box. If you see ANY label text, box it.
+  • Each box covers 1–4 words maximum
+  • Box the text label TIGHTLY — not the structure itself
+  • Even single-letter or single-number labels are worth boxing if they identify a structure
+
+OUTPUT — strict JSON only, no markdown:
+{
+  "master_topic": "what this diagram shows",
+  "cards": [
+    {
+      "type": "IMAGE_OCCLUSION",
+      "occlusion_label": "label text here",
+      "bounding_box": [ymin, xmin, ymax, xmax],
+      "context_hint": "what structure this labels"
+    }
+  ]
+}
+Bounding box: [ymin, xmin, ymax, xmax] on 0–1000 scale. Box tight around the text label."""
 
 
 # ── Title extraction ──────────────────────────────────────────────────────────
@@ -683,13 +709,40 @@ def zones_for_pdf_page(
         logger.info("LLM gave no zones — using formatting fallback")
         zones = _formatting_fallback(page, scale, title_max_y)
 
+    # ── Step 6: last resort — any non-trivial word in the body ────────────────
+    # Ensures slides with ANY readable content are never completely skipped.
+    # Picks the first 3 unique non-filler words from the body as zone candidates.
+    if not zones and body_words:
+        seen_labels: set = set()
+        for w in body_words:
+            text = w[4].strip(".,;:!?()\"'[]{}|")
+            norm = text.lower()
+            if (len(text) >= 3
+                    and norm not in _FILLER_WORDS
+                    and not norm.isnumeric()
+                    and norm not in seen_labels):
+                seen_labels.add(norm)
+                zones.append({
+                    "label": text,
+                    "x": round(w[0] * scale, 1),
+                    "y": round(w[1] * scale, 1),
+                    "width": round((w[2] - w[0]) * scale, 1),
+                    "height": round((w[3] - w[1]) * scale, 1),
+                })
+                if len(zones) >= 3:
+                    break
+        if zones:
+            logger.info(f"Last-resort: created {len(zones)} zone(s) from raw body words")
+
     return zones
 
 
 # ── Vision model (shared by images and diagrams) ─────────────────────────────
 
-def _call_vision_gemini(image_bytes: bytes, img_w: int, img_h: int) -> Optional[List[Dict]]:
-    """Ask Gemini 1.5 Flash to identify key terms using the AnkiFlow Pro prompt.
+def _call_vision_gemini(
+    image_bytes: bytes, img_w: int, img_h: int, prompt: str = ANKIFLOW_VISION_PROMPT
+) -> Optional[List[Dict]]:
+    """Ask Gemini 1.5 Flash to identify key terms using the given prompt.
     Returns zones in pixel coords of the source image."""
     from app.core.config import settings
     if not settings.GEMINI_API_KEY:
@@ -704,7 +757,7 @@ def _call_vision_gemini(image_bytes: bytes, img_w: int, img_h: int) -> Optional[
         model = genai.GenerativeModel("gemini-1.5-flash")
         img = PILImage.open(io.BytesIO(image_bytes))
 
-        response = model.generate_content([ANKIFLOW_VISION_PROMPT, img])
+        response = model.generate_content([prompt, img])
         raw = response.text or ""
         raw = re.sub(r"```(?:json)?", "", raw).replace("```", "").strip()
         match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -786,14 +839,21 @@ def zones_for_image(
     image_bytes: bytes, img_w: int, img_h: int, checklist_text: Optional[str] = None
 ) -> List[Dict]:
     """
-    Generate occlusion zones for a plain image file.
-    1. Try Groq vision model (percentage coords → pixels)
-    2. Fallback: Tesseract OCR word boxes + LLM term selection
+    Generate occlusion zones for a plain image file (rendered slide or standalone image).
+    1. Gemini with slide prompt (best for text-heavy slides)
+    2. Gemini with diagram prompt (best for anatomy/science images)
+    3. Groq vision fallback
+    4. Tesseract OCR + LLM term selection
     """
-    # Gemini 1.5 Flash (best quality) → Groq fallback
+    # Gemini 1.5 Flash with slide prompt
     gemini_zones = _call_vision_gemini(image_bytes, img_w, img_h)
     if gemini_zones:
         return gemini_zones
+
+    # Gemini retry with diagram-specific prompt (catches image-heavy/anatomy slides)
+    gemini_diag_zones = _call_vision_gemini(image_bytes, img_w, img_h, prompt=DIAGRAM_VISION_PROMPT)
+    if gemini_diag_zones:
+        return gemini_diag_zones
 
     pct_zones = _call_vision_groq(image_bytes)
     if pct_zones:
@@ -865,7 +925,34 @@ def zones_for_image(
                     })
                     used.add(i)
                     break
-        return [z for z in zones if z["width"] > 3 and z["height"] > 3]
+
+        valid = [z for z in zones if z["width"] > 3 and z["height"] > 3]
+        if valid:
+            return valid
+
+        # Last resort: if LLM matched nothing, take any 3 non-filler body words directly
+        seen_raw: set = set()
+        raw_zones = []
+        for w in words:
+            if w["y"] <= min_y + 30:
+                continue  # skip title row
+            norm = w["text"].lower().strip(".,;:!?()'\"")
+            if (len(norm) >= 3
+                    and norm not in _FILLER_WORDS
+                    and not norm.isnumeric()
+                    and norm not in seen_raw
+                    and w["x1"] - w["x"] > 3 and w["y1"] - w["y"] > 3):
+                seen_raw.add(norm)
+                raw_zones.append({
+                    "label": w["text"].strip(".,;:!?()'\""),
+                    "x": float(w["x"]),
+                    "y": float(w["y"]),
+                    "width": float(w["x1"] - w["x"]),
+                    "height": float(w["y1"] - w["y"]),
+                })
+                if len(raw_zones) >= 3:
+                    break
+        return raw_zones
 
     except Exception as e:
         logger.warning(f"Tesseract fallback failed: {e}")
@@ -939,8 +1026,14 @@ def diagram_cards_for_pdf_page(page) -> List[Dict]:
             except Exception:
                 continue
 
-        # Try Gemini first, then Groq
-        zones = _call_vision_gemini(image_bytes, diag_w, diag_h)
+        # Try Gemini with diagram-specific prompt first (best for anatomy/science)
+        zones = _call_vision_gemini(image_bytes, diag_w, diag_h, prompt=DIAGRAM_VISION_PROMPT)
+
+        # Gemini fallback: try with the general slide prompt
+        if not zones:
+            zones = _call_vision_gemini(image_bytes, diag_w, diag_h)
+
+        # Groq fallback
         if not zones:
             pct_zones = _call_vision_groq(image_bytes)
             if pct_zones:
@@ -958,8 +1051,35 @@ def diagram_cards_for_pdf_page(page) -> List[Dict]:
                         "height": round(ph, 1),
                     })
 
+        # OCR last resort: if image has text labels, Tesseract will find them
         if not zones:
-            logger.info(f"No vision zones for diagram (xref={xref}) — skipping")
+            try:
+                import io
+                import pytesseract
+                from PIL import Image as _PILImg
+                ocr_img = _PILImg.open(io.BytesIO(image_bytes))
+                ocr_data = pytesseract.image_to_data(ocr_img, output_type=pytesseract.Output.DICT)
+                for idx, text in enumerate(ocr_data["text"]):
+                    if (text.strip() and len(text.strip()) >= 2
+                            and int(ocr_data["conf"][idx]) > 40
+                            and text.lower().strip(".,;:!?") not in _FILLER_WORDS):
+                        x = ocr_data["left"][idx]
+                        y = ocr_data["top"][idx]
+                        w = ocr_data["width"][idx]
+                        h = ocr_data["height"][idx]
+                        if w > 3 and h > 3:
+                            zones.append({
+                                "label": text.strip(),
+                                "x": float(x), "y": float(y),
+                                "width": float(w), "height": float(h),
+                            })
+                    if len(zones) >= 8:
+                        break
+            except Exception as e:
+                logger.debug(f"Diagram OCR fallback failed: {e}")
+
+        if not zones:
+            logger.info(f"No zones found for diagram (xref={xref}) — skipping")
             continue
 
         results.append({
