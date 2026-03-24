@@ -158,8 +158,8 @@ Do NOT place any occlusion box on the title or any word in it.
 ═══════════════════════════════════════════
 STEP 2 — FIND KEYWORDS TO BOX
 ═══════════════════════════════════════════
-You are looking for 2–4 single keywords — the ANSWERS a student must recall.
-Each box covers exactly ONE word (or at most two words for named concepts).
+You are looking for 3–8 keywords and key phrases — the ANSWERS a student must recall.
+Each box covers 1–4 words. Single words preferred, but multi-word key phrases are allowed.
 
 FILL-IN-THE-BLANK TEST — apply this before drawing every box:
   Take the bullet text. Replace your chosen word with a blank.
@@ -207,7 +207,8 @@ HARD RULES:
   • NEVER box pure filler: "is are was the a an that which does do not and or but"
   • NEVER box the title / heading
   • NEVER box example variable names, parameter names, or constant names used as illustrations in code (e.g. MONDAY, x, arr, Node, i, Day) — box the keyword or concept instead
-  • 3–8 boxes — cover ALL important vocabulary and key phrases, not just one per bullet
+  • 3–8 boxes per slide — cover ALL important vocabulary and key phrases. Dense premed/science slides may need more.
+  • Multi-word medical/scientific key phrases up to 4 words are explicitly allowed (e.g. "hepatic glucose production", "loss of function", "type 2 diabetes")
 
 ═══════════════════════════════════════════
 STEP 3 — OUTPUT (strict JSON, no markdown)
@@ -362,22 +363,47 @@ def _term_overlaps_title(term: str, title_words: Set[str], title_str: str = "") 
 
 def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) -> List[str]:
     """Hard rules applied after LLM output to reject bad terms.
-    Any term containing a sentence-fragment word is unconditionally rejected.
-    Hard cap: 2 words maximum."""
+    Hard cap: 4 words maximum (allows multi-word medical/scientific key phrases)."""
+    # Words that indicate the WHOLE term is a sentence fragment (not just connectors)
+    _SENTENCE_STARTERS = {
+        "is", "are", "was", "were", "be", "been", "being",
+        "the", "a", "an",
+        "that", "which", "who", "whom",
+        "does", "do", "did", "not",
+        "and", "or", "but",
+        "can", "will", "would", "could", "should", "may", "might",
+        "this", "these", "those", "it", "its",
+        "use", "uses", "used", "using",
+        "allow", "allows", "allowed",
+        "define", "defines", "defined",
+        "create", "creates", "created",
+        "include", "includes", "including",
+        "refer", "refers", "referred",
+        "allocate", "store", "stores", "stored",
+        "group", "groups", "grouped",
+    }
+
     filtered = []
     for term in terms:
         words = term.split()
         clean_words = [w.lower().strip(".,;:!?()'\"[]{}") for w in words]
 
-        # Hard cap: 2 words max
-        if len(words) > 2:
-            logger.info(f"Rejected (>2 words): {repr(term)}")
+        # Hard cap: 4 words max
+        if len(words) > 4:
+            logger.info(f"Rejected (>4 words): {repr(term)}")
             continue
 
-        # Reject if ANY word is a sentence-fragment indicator
-        if any(w in _SENTENCE_FRAGMENT_WORDS for w in clean_words):
-            logger.info(f"Rejected (sentence word): {repr(term)}")
-            continue
+        # For 1-2 word terms: reject if ANY word is a sentence indicator
+        # For 3-4 word terms: only reject if the FIRST word is a sentence indicator
+        # (allows "loss of function", "type 2 diabetes", "hepatic glucose production")
+        if len(words) <= 2:
+            if any(w in _SENTENCE_STARTERS for w in clean_words):
+                logger.info(f"Rejected (sentence word): {repr(term)}")
+                continue
+        else:
+            if clean_words[0] in _SENTENCE_STARTERS:
+                logger.info(f"Rejected (sentence starter): {repr(term)}")
+                continue
 
         # Skip if it's entirely filler words
         if all(w in _FILLER_WORDS for w in clean_words):
@@ -430,7 +456,7 @@ def _call_groq_occlusion(prompt: str) -> Optional[str]:
                     "content": (
                         "You are an Anki flashcard expert. "
                         "You follow instructions exactly and return only valid JSON arrays. "
-                        "You never return full sentences as occlusion terms — only single keywords."
+                        "You return short keywords and key phrases (1–4 words) that students must memorise — never full sentences."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -492,13 +518,12 @@ def _match_terms_to_pdf_words(
 
     for term in key_terms:
         term_lower = term.lower()
-        # Hard cap: never span more than 2 words in the PDF, regardless of term length
-        term_parts = term_lower.split()[:2]
+        term_parts = term_lower.split()[:4]  # allow up to 4 words
 
         for i in range(len(body_words)):
             if i in used:
                 continue
-            word_text = body_words[i][4].lower()
+            word_text = body_words[i][4].lower().strip(".,;:!?()'\"[]{}")
 
             if len(term_parts) == 1:
                 if term_parts[0] in word_text:
@@ -516,8 +541,9 @@ def _match_terms_to_pdf_words(
                 seq = body_words[i: i + len(term_parts)]
                 if len(seq) < len(term_parts):
                     continue
-                seq_text = " ".join(w[4].lower() for w in seq)
-                if term_parts[0] in seq_text:
+                # Check each word in the sequence matches the corresponding term part
+                seq_words = [w[4].lower().strip(".,;:!?()'\"[]{}") for w in seq]
+                if all(tp in sw for tp, sw in zip(term_parts, seq_words)):
                     x = min(w[0] for w in seq) * scale
                     y = min(w[1] for w in seq) * scale
                     x1 = max(w[2] for w in seq) * scale

@@ -331,6 +331,20 @@ export default function AccountPage() {
             </>
           )}
         </Section>
+
+        {/* Log out */}
+        <div className="glass border border-border rounded-2xl p-6 flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-foreground">Log out</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Sign out of your account on this device.</p>
+          </div>
+          <button
+            onClick={() => { localStorage.removeItem("token"); window.location.href = "/login"; }}
+            className="h-10 px-5 rounded-xl border border-border hover:bg-muted text-muted-foreground font-semibold text-sm transition-colors"
+          >
+            Log out
+          </button>
+        </div>
       </div>
     </main>
   );
