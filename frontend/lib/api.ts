@@ -31,5 +31,11 @@ export async function apiFetch(
     throw new Error("Session expired");
   }
 
+  if (res.status === 403) {
+    localStorage.removeItem("token");
+    window.location.href = "/?subscription=canceled";
+    throw new Error("Subscription inactive");
+  }
+
   return res;
 }

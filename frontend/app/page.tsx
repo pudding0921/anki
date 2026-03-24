@@ -483,10 +483,10 @@ export default function LandingPage() {
       <section className="border-y border-border/60 py-10 px-4 bg-card/30">
         <div className="max-w-4xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
           {[
-            { value: 50000, suffix: "+", label: "Cards generated" },
             { value: 10, suffix: "s", label: "Avg. generation time" },
-            { value: 98, suffix: "%", label: "Retention rate" },
             { value: 30, suffix: "s", label: "First deck ready in" },
+            { value: 50, suffix: "MB", label: "Max file size" },
+            { value: 30, suffix: " days", label: "Trash recovery window" },
           ].map((stat) => (
             <Reveal key={stat.label} className="flex flex-col gap-1">
               <span className="text-3xl font-extrabold gradient-brand">
@@ -683,14 +683,14 @@ export default function LandingPage() {
         <Reveal className="relative z-10 max-w-2xl mx-auto flex flex-col items-center gap-7 text-center">
           <div className="inline-flex items-center gap-2 border border-indigo-400/25 bg-indigo-400/8 rounded-full px-4 py-1.5 text-xs font-medium text-indigo-300">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-            Join thousands of students already using FlowCard
+            AI-powered · Spaced Repetition · Anki Export
           </div>
           <h2 className="text-4xl sm:text-5xl font-extrabold tracking-tight leading-tight">
             Stop making flashcards.<br />
             <span className="gradient-brand">Start remembering.</span>
           </h2>
           <p className="text-muted-foreground text-lg max-w-md">
-            Pick a plan and generate your first deck in under 60 seconds.
+            Pick a plan and generate your first AI flashcard deck in under 30 seconds.
           </p>
           <a
             href="#pricing"
@@ -714,7 +714,7 @@ export default function LandingPage() {
             </div>
             <span className="text-sm font-bold gradient-brand">FlowCard</span>
           </div>
-          <p className="text-xs text-muted-foreground/60">© 2025 FlowCard. All rights reserved.</p>
+          <p className="text-xs text-muted-foreground/60">© 2026 FlowCard. All rights reserved.</p>
           <div className="flex gap-5 text-xs text-muted-foreground">
             <a href="#pricing" className="hover:text-foreground transition-colors">Pricing</a>
             <a href="#contact" className="hover:text-foreground transition-colors">Contact</a>

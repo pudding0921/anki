@@ -20,7 +20,7 @@ export function useAuthGuard() {
         return res.json();
       })
       .then((user) => {
-        if (user.subscription_status !== "active") {
+        if (!["active", "trialing"].includes(user.subscription_status)) {
           localStorage.removeItem("token");
           router.replace("/?subscription=canceled");
         }
