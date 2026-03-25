@@ -11,6 +11,7 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -104,7 +105,7 @@ async def upload_pages(
     file: UploadFile = File(...),
     current_user: User = Depends(get_active_user),
 ):
-    """Upload an image or PDF. Returns list of rendered page images."""
+    """Upload an image or PDF. Streams NDJSON page-by-page to keep the connection alive."""
     content = await file.read()
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File exceeds the 50 MB limit")
@@ -114,44 +115,8 @@ async def upload_pages(
     user_dir = os.path.join(_ABS_UPLOAD_DIR, str(current_user.id))
     os.makedirs(user_dir, exist_ok=True)
 
-    pages = []
-
-    if ext == ".pdf":
-        try:
-            import fitz
-            # Save original PDF so batch-occlusion can re-open it for word extraction
-            pdf_name = f"{uuid.uuid4()}.pdf"
-            pdf_abs = os.path.join(user_dir, pdf_name)
-            with open(pdf_abs, "wb") as f:
-                f.write(content)
-            source_pdf_url = f"/uploads/{current_user.id}/{pdf_name}"
-
-            doc = fitz.open(pdf_abs)
-            # 3x scale = 216 DPI — noticeably sharper than 2x on HiDPI screens
-            _RENDER_SCALE = 3
-            mat = fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE)
-            for i, page in enumerate(doc):
-                pix = page.get_pixmap(matrix=mat)
-                img_name = f"{uuid.uuid4()}.png"
-                img_abs = os.path.join(user_dir, img_name)
-                pix.save(img_abs)
-                local_path = f"/uploads/{current_user.id}/{img_name}"
-                # Upload to persistent storage if configured
-                with open(img_abs, "rb") as f:
-                    img_bytes = f.read()
-                supabase_url = storage_upload(img_bytes, f"{current_user.id}/{img_name}")
-                pages.append({
-                    "image_path": supabase_url or local_path,
-                    "width": pix.width,
-                    "height": pix.height,
-                    "page": i + 1,
-                    "source_pdf": source_pdf_url,
-                    "render_scale": _RENDER_SCALE,
-                })
-            doc.close()
-        except ImportError:
-            raise HTTPException(status_code=500, detail="PyMuPDF not installed")
-    else:
+    # ── Single image: fast path, no streaming needed ──────────────────────────
+    if ext != ".pdf":
         img_name = f"{uuid.uuid4()}{ext or '.jpg'}"
         with open(os.path.join(user_dir, img_name), "wb") as f:
             f.write(content)
@@ -165,14 +130,68 @@ async def upload_pages(
         local_path = f"/uploads/{current_user.id}/{img_name}"
         content_type = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
         supabase_url = storage_upload(content, f"{current_user.id}/{img_name}", content_type)
-        pages.append({
+        page = {"image_path": supabase_url or local_path, "width": w, "height": h, "page": 1}
+        return {"pages": [page]}
+
+    # ── PDF: stream pages as they are rendered + uploaded ────────────────────
+    try:
+        import fitz
+    except ImportError:
+        raise HTTPException(status_code=500, detail="PyMuPDF not installed")
+
+    pdf_name = f"{uuid.uuid4()}.pdf"
+    pdf_abs = os.path.join(user_dir, pdf_name)
+    with open(pdf_abs, "wb") as f:
+        f.write(content)
+    source_pdf_url = f"/uploads/{current_user.id}/{pdf_name}"
+
+    doc = fitz.open(pdf_abs)
+    page_count = len(doc)
+    _RENDER_SCALE = 3
+    # Pre-collect page sizes before closing doc (fitz not thread-safe)
+    page_rects = [(i, page.rect) for i, page in enumerate(doc)]
+    doc.close()
+
+    def _render_and_upload(page_index: int) -> dict:
+        """Render one PDF page and upload it. Runs in a thread."""
+        import fitz as _fitz
+        _doc = _fitz.open(pdf_abs)
+        _mat = _fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE)
+        pix = _doc[page_index].get_pixmap(matrix=_mat)
+        img_name = f"{uuid.uuid4()}.png"
+        img_abs = os.path.join(user_dir, img_name)
+        pix.save(img_abs)
+        img_bytes = pix.tobytes("png")
+        w, h = pix.width, pix.height
+        _doc.close()
+        local_path = f"/uploads/{current_user.id}/{img_name}"
+        supabase_url = storage_upload(img_bytes, f"{current_user.id}/{img_name}")
+        return {
             "image_path": supabase_url or local_path,
             "width": w,
             "height": h,
-            "page": 1,
-        })
+            "page": page_index + 1,
+            "source_pdf": source_pdf_url,
+            "render_scale": _RENDER_SCALE,
+        }
 
-    return {"pages": pages}
+    async def stream_pages():
+        yield json.dumps({"type": "total", "total": page_count}) + "\n"
+        loop = asyncio.get_event_loop()
+        pages = []
+        with ThreadPoolExecutor(max_workers=min(page_count, 8)) as executor:
+            futures = [loop.run_in_executor(executor, _render_and_upload, i) for i, _ in page_rects]
+            for fut in asyncio.as_completed(futures):
+                page_data = await fut
+                pages.append(page_data)
+                yield json.dumps({"type": "page", **page_data}) + "\n"
+        yield json.dumps({"type": "done", "pages": pages}) + "\n"
+
+    return StreamingResponse(
+        stream_pages(),
+        media_type="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 @router.post("/batch-occlusion")
@@ -292,95 +311,110 @@ async def batch_occlusion(
             "diagram_specs": diagram_specs,
         }
 
-    # Run all pages in parallel — each page's LLM call is independent
-    loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor(max_workers=min(len(pages), 8)) as executor:
-        page_results = await asyncio.gather(
-            *[loop.run_in_executor(executor, _process_page_sync, p) for p in pages]
-        )
+    # Stream results back as each page completes — keeps the connection alive
+    # so Render's proxy (30 s idle timeout) doesn't kill long-running jobs.
+    async def stream_results():
+        nonlocal created, skipped
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=min(len(pages), 8)) as executor:
+            futures = [loop.run_in_executor(executor, _process_page_sync, p) for p in pages]
+            for fut in asyncio.as_completed(futures):
+                pr = await fut
+                page_num = pr["page"]
+                image_path = pr["image_path"]
+                img_w = pr["img_w"]
+                img_h = pr["img_h"]
+                zones = pr["zones"]
+                diagram_specs = pr["diagram_specs"]
 
-    # Write results to DB sequentially (SQLAlchemy session is not thread-safe)
-    for pr in page_results:
-        page_num = pr["page"]
-        image_path = pr["image_path"]
-        img_w = pr["img_w"]
-        img_h = pr["img_h"]
-        zones = pr["zones"]
-        diagram_specs = pr["diagram_specs"]
+                if pr.get("status") == "error":
+                    skipped += 1
+                    page_result: dict = {"page": page_num, "status": "error", "reason": pr.get("reason", "")}
+                    results.append(page_result)
+                    yield json.dumps({"type": "page", **page_result}) + "\n"
+                    continue
 
-        if pr.get("status") == "error":
-            skipped += 1
-            results.append({"page": page_num, "status": "error", "reason": pr.get("reason", "")})
-            continue
+                page_result = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
 
-        page_result: dict = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
+                if zones:
+                    card = Card(
+                        deck_id=deck.id,
+                        card_type="occlusion",
+                        front="",
+                        back="",
+                        image_path=image_path,
+                        image_width=img_w,
+                        image_height=img_h,
+                    )
+                    db.add(card)
+                    db.flush()
+                    for z in zones:
+                        db.add(OcclusionZone(
+                            card_id=card.id,
+                            label=z["label"],
+                            x=z["x"],
+                            y=z["y"],
+                            width=z["width"],
+                            height=z["height"],
+                        ))
+                    created += 1
+                    page_result["status"] = "created"
+                    page_result["zones"] = len(zones)
+                else:
+                    skipped += 1
+                    page_result["reason"] = "no text zones found"
 
-        if zones:
-            card = Card(
-                deck_id=deck.id,
-                card_type="occlusion",
-                front="",
-                back="",
-                image_path=image_path,
-                image_width=img_w,
-                image_height=img_h,
-            )
-            db.add(card)
-            db.flush()
-            for z in zones:
-                db.add(OcclusionZone(
-                    card_id=card.id,
-                    label=z["label"],
-                    x=z["x"],
-                    y=z["y"],
-                    width=z["width"],
-                    height=z["height"],
-                ))
-            created += 1
-            page_result["status"] = "created"
-            page_result["zones"] = len(zones)
-        else:
-            skipped += 1
-            page_result["reason"] = "no text zones found"
+                for spec in diagram_specs:
+                    diag_ext = spec["ext"] if spec["ext"] in ("png", "jpg", "jpeg") else "png"
+                    diag_name = f"{uuid.uuid4()}.{diag_ext}"
+                    with open(os.path.join(user_dir, diag_name), "wb") as f:
+                        f.write(spec["image_bytes"])
+                    local_diag_path = f"/uploads/{current_user.id}/{diag_name}"
+                    diag_ct = "image/jpeg" if diag_ext in ("jpg", "jpeg") else "image/png"
+                    supabase_diag_url = storage_upload(spec["image_bytes"], f"{current_user.id}/{diag_name}", diag_ct)
+                    diag_image_path = supabase_diag_url or local_diag_path
+                    diag_card = Card(
+                        deck_id=deck.id,
+                        card_type="occlusion",
+                        front="",
+                        back="",
+                        image_path=diag_image_path,
+                        image_width=spec["width"],
+                        image_height=spec["height"],
+                    )
+                    db.add(diag_card)
+                    db.flush()
+                    for z in spec["zones"]:
+                        db.add(OcclusionZone(
+                            card_id=diag_card.id,
+                            label=z["label"],
+                            x=z["x"],
+                            y=z["y"],
+                            width=z["width"],
+                            height=z["height"],
+                        ))
+                    created += 1
+                    page_result["diagrams"] = page_result.get("diagrams", 0) + 1
+                    if page_result["status"] == "skipped":
+                        page_result["status"] = "created"
 
-        for spec in diagram_specs:
-            diag_ext = spec["ext"] if spec["ext"] in ("png", "jpg", "jpeg") else "png"
-            diag_name = f"{uuid.uuid4()}.{diag_ext}"
-            with open(os.path.join(user_dir, diag_name), "wb") as f:
-                f.write(spec["image_bytes"])
-            local_diag_path = f"/uploads/{current_user.id}/{diag_name}"
-            diag_ct = "image/jpeg" if diag_ext in ("jpg", "jpeg") else "image/png"
-            supabase_diag_url = storage_upload(spec["image_bytes"], f"{current_user.id}/{diag_name}", diag_ct)
-            diag_image_path = supabase_diag_url or local_diag_path
-            diag_card = Card(
-                deck_id=deck.id,
-                card_type="occlusion",
-                front="",
-                back="",
-                image_path=diag_image_path,
-                image_width=spec["width"],
-                image_height=spec["height"],
-            )
-            db.add(diag_card)
-            db.flush()
-            for z in spec["zones"]:
-                db.add(OcclusionZone(
-                    card_id=diag_card.id,
-                    label=z["label"],
-                    x=z["x"],
-                    y=z["y"],
-                    width=z["width"],
-                    height=z["height"],
-                ))
-            created += 1
-            page_result["diagrams"] = page_result.get("diagrams", 0) + 1
-            if page_result["status"] == "skipped":
-                page_result["status"] = "created"
+                results.append(page_result)
+                yield json.dumps({"type": "page", **page_result}) + "\n"
 
-        results.append(page_result)
+        db.commit()
+        yield json.dumps({
+            "type": "done",
+            "created": created,
+            "skipped": skipped,
+            "deck_id": deck.id,
+            "results": results,
+        }) + "\n"
 
-    db.commit()
-    return {"created": created, "skipped": skipped, "deck_id": deck.id, "results": results}
+    return StreamingResponse(
+        stream_results(),
+        media_type="application/x-ndjson",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 @router.post("/occlusion", response_model=CardOut)

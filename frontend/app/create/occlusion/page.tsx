@@ -44,6 +44,8 @@ export default function OcclusionPage() {
   const [step, setStep] = useState<Step>("upload");
   const [error, setError] = useState("");
   const [pageCount, setPageCount] = useState(0);
+  const [uploadedCount, setUploadedCount] = useState(0);
+  const [processedCount, setProcessedCount] = useState(0);
   const [results, setResults] = useState<{ created: number; skipped: number; results: PageResult[]; deckId?: number }>({
     created: 0, skipped: 0, results: [],
   });
@@ -64,18 +66,50 @@ export default function OcclusionPage() {
     const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
     try {
-      // Step 1: Render PDF pages
+      // Step 1: Render PDF pages (streamed)
+      setUploadedCount(0);
       const uploadForm = new FormData();
       uploadForm.append("file", file);
       const uploadRes = await fetch(`${API_URL}/api/cards/upload-pages`, {
         method: "POST", headers: authHeader, body: uploadForm,
       });
       if (!uploadRes.ok) { const d = await uploadRes.json().catch(() => ({})); throw new Error(d.detail || "Upload failed"); }
-      const { pages }: { pages: PageInfo[] } = await uploadRes.json();
+
+      let pages: PageInfo[] = [];
+      const contentType = uploadRes.headers.get("content-type") ?? "";
+      if (contentType.includes("x-ndjson")) {
+        // PDF: read streaming response
+        const reader = uploadRes.body?.getReader();
+        if (!reader) throw new Error("Streaming not supported");
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const evt = JSON.parse(line);
+              if (evt.type === "total") setPageCount(evt.total);
+              else if (evt.type === "page") setUploadedCount((n) => n + 1);
+              else if (evt.type === "done") pages = evt.pages;
+            } catch { /* ignore */ }
+          }
+        }
+      } else {
+        // Single image: plain JSON response
+        const data = await uploadRes.json();
+        pages = data.pages;
+      }
+      if (!pages.length) throw new Error("No pages returned from upload");
       setPageCount(pages.length);
 
-      // Step 2: AI creates cards
+      // Step 2: AI creates cards (streamed — keeps connection alive for large decks)
       setStep("processing");
+      setProcessedCount(0);
       const batchForm = new FormData();
       batchForm.append("deck_name", deckName.trim() || file.name.replace(/\.[^.]+$/, "") || "Untitled deck");
       batchForm.append("pages_json", JSON.stringify(pages));
@@ -85,7 +119,35 @@ export default function OcclusionPage() {
         method: "POST", headers: authHeader, body: batchForm,
       });
       if (!batchRes.ok) { const d = await batchRes.json().catch(() => ({})); throw new Error(d.detail || "AI processing failed"); }
-      const data = await batchRes.json();
+
+      // Read NDJSON stream — each line is a page result, last line is the summary
+      const reader = batchRes.body?.getReader();
+      if (!reader) throw new Error("Streaming not supported");
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalData: { created: number; skipped: number; deck_id?: number; results: PageResult[] } | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            if (event.type === "page") {
+              setProcessedCount((n) => n + 1);
+            } else if (event.type === "done") {
+              finalData = event;
+            }
+          } catch { /* ignore malformed lines */ }
+        }
+      }
+
+      if (!finalData) throw new Error("AI processing failed: incomplete response");
+      const data = finalData;
       setResults({ ...data, deckId: data.deck_id });
 
       // Step 3: Load cards for review
@@ -270,7 +332,19 @@ export default function OcclusionPage() {
             <div className="w-12 h-12 rounded-full border-4 border-primary border-t-transparent animate-spin" />
             <div>
               <p className="font-semibold text-lg">Uploading & rendering slides…</p>
-              <p className="text-sm text-muted-foreground mt-1">Preparing your file for AI analysis</p>
+              {uploadedCount > 0 && pageCount > 0 ? (
+                <p className="text-sm text-muted-foreground mt-1">{uploadedCount} / {pageCount} pages ready</p>
+              ) : (
+                <p className="text-sm text-muted-foreground mt-1">Preparing your file for AI analysis</p>
+              )}
+              {uploadedCount > 0 && pageCount > 0 && (
+                <div className="mt-3 w-48 h-1.5 bg-muted rounded-full overflow-hidden mx-auto">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-300"
+                    style={{ width: `${Math.round((uploadedCount / pageCount) * 100)}%` }}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -281,17 +355,23 @@ export default function OcclusionPage() {
             <div className="w-12 h-12 rounded-full border-4 border-primary border-t-transparent animate-spin" />
             <div>
               <p className="font-semibold text-lg">AI is analyzing your slides…</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Processing {pageCount} page{pageCount !== 1 ? "s" : ""} — identifying key terms and creating cards
-              </p>
-              <p className="text-xs text-muted-foreground mt-3">
-                {(() => {
-                  const lo = Math.max(10, pageCount * 5);
-                  const hi = Math.max(20, pageCount * 10);
-                  const fmt = (s: number) => s >= 60 ? `${Math.round(s / 60)} min` : `${s}s`;
-                  return `This may take ${fmt(lo)}–${fmt(hi)}`;
-                })()}
-              </p>
+              {processedCount > 0 ? (
+                <p className="text-sm text-muted-foreground mt-1">
+                  {processedCount} / {pageCount} page{pageCount !== 1 ? "s" : ""} done
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground mt-1">
+                  Processing {pageCount} page{pageCount !== 1 ? "s" : ""} — identifying key terms and creating cards
+                </p>
+              )}
+              {processedCount > 0 && pageCount > 0 && (
+                <div className="mt-3 w-48 h-1.5 bg-muted rounded-full overflow-hidden mx-auto">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-300"
+                    style={{ width: `${Math.round((processedCount / pageCount) * 100)}%` }}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -413,6 +493,8 @@ export default function OcclusionPage() {
                   setStep("upload");
                   setResults({ created: 0, skipped: 0, results: [], deckId: undefined });
                   setPageCount(0);
+                  setUploadedCount(0);
+                  setProcessedCount(0);
                   setChecklistFile(null);
                   setReviewCards([]);
                   setSavedCardIds(new Set());
