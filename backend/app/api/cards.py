@@ -18,6 +18,19 @@ def _cleanup_old_jobs() -> None:
     for jid in [k for k, v in _batch_jobs.items() if v.get("expires_at", 0) < now]:
         del _batch_jobs[jid]
 
+# Hard cap on simultaneous heavy jobs (PDF render + AI).
+# Each job can use ~50-100 MB; Render Starter = 512 MB total.
+# At 4 concurrent jobs we stay safely under the limit.
+_PROCESSING_SEMAPHORE: asyncio.Semaphore | None = None
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _PROCESSING_SEMAPHORE
+    if _PROCESSING_SEMAPHORE is None:
+        _PROCESSING_SEMAPHORE = asyncio.Semaphore(4)
+    return _PROCESSING_SEMAPHORE
+
+MAX_PDF_PAGES = 60  # refuse uploads that would balloon memory
+
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -162,39 +175,45 @@ async def upload_pages(
     page_count = len(doc)
     doc.close()
 
+    if page_count > MAX_PDF_PAGES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PDF has {page_count} pages — maximum is {MAX_PDF_PAGES}. Split the file and upload in parts."
+        )
+
     async def stream_pages():
-        loop = asyncio.get_event_loop()
-        pages = []
-        yield json.dumps({"type": "total", "total": page_count}) + "\n"
+        sem = _get_semaphore()
+        async with sem:  # only N uploads render simultaneously
+            loop = asyncio.get_event_loop()
+            pages = []
+            yield json.dumps({"type": "total", "total": page_count}) + "\n"
 
-        for page_index in range(page_count):
-            # Render one page at a time — only one pixmap in RAM at a time
-            def _render_one(idx: int) -> dict:
-                import fitz as _fitz
-                _doc = _fitz.open(pdf_abs)
-                pix = _doc[idx].get_pixmap(matrix=_fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE))
-                img_name = f"{uuid.uuid4()}.png"
-                img_abs = os.path.join(user_dir, img_name)
-                pix.save(img_abs)
-                w, h = pix.width, pix.height
-                pix = None  # free pixmap before upload
-                _doc.close()
-                # Read from disk and upload, then we can let it be GC'd
-                with open(img_abs, "rb") as fh:
-                    img_bytes = fh.read()
-                supabase_url = storage_upload(img_bytes, f"{current_user.id}/{img_name}")
-                img_bytes = None  # free upload buffer
-                return {
-                    "image_path": supabase_url or f"/uploads/{current_user.id}/{img_name}",
-                    "width": w, "height": h, "page": idx + 1,
-                    "source_pdf": source_pdf_url, "render_scale": _RENDER_SCALE,
-                }
+            for page_index in range(page_count):
+                def _render_one(idx: int) -> dict:
+                    import fitz as _fitz
+                    _doc = _fitz.open(pdf_abs)
+                    pix = _doc[idx].get_pixmap(matrix=_fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE))
+                    img_name = f"{uuid.uuid4()}.png"
+                    img_abs = os.path.join(user_dir, img_name)
+                    pix.save(img_abs)
+                    w, h = pix.width, pix.height
+                    pix = None
+                    _doc.close()
+                    with open(img_abs, "rb") as fh:
+                        img_bytes = fh.read()
+                    supabase_url = storage_upload(img_bytes, f"{current_user.id}/{img_name}")
+                    img_bytes = None
+                    return {
+                        "image_path": supabase_url or f"/uploads/{current_user.id}/{img_name}",
+                        "width": w, "height": h, "page": idx + 1,
+                        "source_pdf": source_pdf_url, "render_scale": _RENDER_SCALE,
+                    }
 
-            page_data = await loop.run_in_executor(None, _render_one, page_index)
-            pages.append(page_data)
-            yield json.dumps({"type": "page", **page_data}) + "\n"
+                page_data = await loop.run_in_executor(None, _render_one, page_index)
+                pages.append(page_data)
+                yield json.dumps({"type": "page", **page_data}) + "\n"
 
-        yield json.dumps({"type": "done", "pages": pages}) + "\n"
+            yield json.dumps({"type": "done", "pages": pages}) + "\n"
 
     return StreamingResponse(
         stream_pages(),
@@ -212,6 +231,16 @@ async def _run_batch_occlusion_job(
     user_id: int,
 ) -> None:
     """Background task: processes all pages and writes cards to DB independently of the HTTP request."""
+    from app.database import SessionLocal
+    sem = _get_semaphore()
+    async with sem:  # cap concurrent AI jobs to prevent OOM
+        await _run_batch_occlusion_job_inner(job_id, pages, deck_name, user_dir, checklist_text, user_id)
+
+
+async def _run_batch_occlusion_job_inner(
+    job_id: str, pages: list, deck_name: str, user_dir: str,
+    checklist_text: Optional[str], user_id: int,
+) -> None:
     from app.database import SessionLocal
     db = SessionLocal()
     try:
