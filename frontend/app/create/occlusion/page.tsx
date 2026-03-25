@@ -1,11 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { API_URL, apiFetch, imgUrl } from "@/lib/api";
 import { useAuthGuard } from "@/lib/useAuthGuard";
 import OcclusionEditor, { type Zone } from "@/components/OcclusionEditor";
+
+const PENDING_JOB_KEY = "flowcard_pending_occlusion_job";
 
 interface PageInfo {
   image_path: string;
@@ -58,6 +60,70 @@ export default function OcclusionPage() {
   function onDragLeave(e: React.DragEvent) { if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false); }
   function onDrop(e: React.DragEvent) { e.preventDefault(); setIsDragging(false); const f = e.dataTransfer.files?.[0]; if (f) run(f); }
 
+  // Resume a pending job when returning to the tab after navigating away
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    const pending = localStorage.getItem(PENDING_JOB_KEY);
+    if (!pending || !token) return;
+    try {
+      const { jobId, total } = JSON.parse(pending);
+      const authHeader = { Authorization: `Bearer ${token}` };
+      setPageCount(total);
+      setStep("processing");
+      pollJob(jobId, authHeader).catch((err) => {
+        setError(err instanceof Error ? err.message : "Something went wrong");
+        setStep("upload");
+        localStorage.removeItem(PENDING_JOB_KEY);
+      });
+    } catch {
+      localStorage.removeItem(PENDING_JOB_KEY);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function pollJob(jobId: string, authHeader: Record<string, string>) {
+    while (true) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const statusRes = await fetch(`${API_URL}/api/cards/batch-occlusion/status/${jobId}`, { headers: authHeader });
+      if (!statusRes.ok) {
+        if (statusRes.status === 404) throw new Error("Job expired — please re-upload your slides.");
+        throw new Error("Failed to check job status");
+      }
+      const job = await statusRes.json();
+      setProcessedCount(job.done ?? 0);
+      setPageCount(job.total ?? 0);
+
+      if (job.status === "error") {
+        localStorage.removeItem(PENDING_JOB_KEY);
+        throw new Error(job.error || "AI processing failed");
+      }
+
+      if (job.status === "done") {
+        localStorage.removeItem(PENDING_JOB_KEY);
+        setResults({ created: job.created, skipped: job.skipped, results: job.results, deckId: job.deck_id });
+
+        // Load cards for review
+        if (job.deck_id) {
+          const deckRes = await fetch(`${API_URL}/api/decks/${job.deck_id}`, { headers: authHeader });
+          if (deckRes.ok) {
+            const deck = await deckRes.json();
+            const cards: ReviewCard[] = (deck.cards ?? []).filter(
+              (c: ReviewCard & { card_type: string }) => c.card_type === "occlusion"
+            );
+            if (cards.length > 0) {
+              setReviewCards(cards);
+              setSavedCardIds(new Set());
+              setStep("reviewing");
+              return;
+            }
+          }
+        }
+        setStep("done");
+        return;
+      }
+    }
+  }
+
   async function run(file: File) {
     setError("");
     setStep("uploading");
@@ -78,7 +144,6 @@ export default function OcclusionPage() {
       let pages: PageInfo[] = [];
       const contentType = uploadRes.headers.get("content-type") ?? "";
       if (contentType.includes("x-ndjson")) {
-        // PDF: read streaming response
         const reader = uploadRes.body?.getReader();
         if (!reader) throw new Error("Streaming not supported");
         const decoder = new TextDecoder();
@@ -100,14 +165,13 @@ export default function OcclusionPage() {
           }
         }
       } else {
-        // Single image: plain JSON response
         const data = await uploadRes.json();
         pages = data.pages;
       }
       if (!pages.length) throw new Error("No pages returned from upload");
       setPageCount(pages.length);
 
-      // Step 2: AI creates cards (streamed — keeps connection alive for large decks)
+      // Step 2: Start background AI job — returns immediately with job_id
       setStep("processing");
       setProcessedCount(0);
       const batchForm = new FormData();
@@ -119,52 +183,13 @@ export default function OcclusionPage() {
         method: "POST", headers: authHeader, body: batchForm,
       });
       if (!batchRes.ok) { const d = await batchRes.json().catch(() => ({})); throw new Error(d.detail || "AI processing failed"); }
+      const { job_id, total } = await batchRes.json();
 
-      // Read NDJSON stream — each line is a page result, last line is the summary
-      const reader = batchRes.body?.getReader();
-      if (!reader) throw new Error("Streaming not supported");
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalData: { created: number; skipped: number; deck_id?: number; results: PageResult[] } | null = null;
+      // Persist job so we can resume if the user switches tabs
+      localStorage.setItem(PENDING_JOB_KEY, JSON.stringify({ jobId: job_id, total }));
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const event = JSON.parse(line);
-            if (event.type === "page") {
-              setProcessedCount((n) => n + 1);
-            } else if (event.type === "done") {
-              finalData = event;
-            }
-          } catch { /* ignore malformed lines */ }
-        }
-      }
-
-      if (!finalData) throw new Error("AI processing failed: incomplete response");
-      const data = finalData;
-      setResults({ ...data, deckId: data.deck_id });
-
-      // Step 3: Load cards for review
-      if (data.deck_id) {
-        const deckRes = await fetch(`${API_URL}/api/decks/${data.deck_id}`, { headers: authHeader });
-        if (deckRes.ok) {
-          const deck = await deckRes.json();
-          const cards: ReviewCard[] = (deck.cards ?? []).filter((c: ReviewCard & { card_type: string }) => c.card_type === "occlusion");
-          if (cards.length > 0) {
-            setReviewCards(cards);
-            setSavedCardIds(new Set());
-            setStep("reviewing");
-            return;
-          }
-        }
-      }
-      setStep("done");
+      // Step 3: Poll until done
+      await pollJob(job_id, authHeader);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
       setStep("upload");

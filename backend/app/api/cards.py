@@ -2,11 +2,21 @@ import asyncio
 import json
 import logging
 import os
+import time as _time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
+
+# In-memory job store for background batch-occlusion jobs.
+# Single-instance Render deployment — in-memory is sufficient.
+_batch_jobs: dict = {}  # job_id -> {status, done, total, results, ...}
+
+def _cleanup_old_jobs() -> None:
+    now = _time.time()
+    for jid in [k for k, v in _batch_jobs.items() if v.get("expires_at", 0) < now]:
+        del _batch_jobs[jid]
 
 logger = logging.getLogger(__name__)
 
@@ -194,127 +204,84 @@ async def upload_pages(
     )
 
 
-@router.post("/batch-occlusion")
-@limiter.limit("10/hour")
-async def batch_occlusion(
-    request: Request,
-    deck_name: str = Form(...),
-    pages_json: str = Form(...),   # JSON: [{image_path, width, height, page, source_pdf?}]
-    checklist_file: Optional[UploadFile] = File(None),
-    current_user: User = Depends(get_active_user),
-    db: Session = Depends(get_db),
-):
-    """
-    AI-powered batch occlusion card creation.
-    For every page passed in, the AI analyzes the slide and creates a card automatically.
-    No manual drawing required.
-    """
+async def _run_batch_occlusion_job(
+    job_id: str,
+    pages: list,
+    deck_name: str,
+    user_dir: str,
+    checklist_text: Optional[str],
+    user_id: int,
+) -> None:
+    """Background task: processes all pages and writes cards to DB independently of the HTTP request."""
+    from app.database import SessionLocal
+    db = SessionLocal()
     try:
-        pages = json.loads(pages_json)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid pages_json")
+        deck = db.query(Deck).filter(Deck.name == deck_name, Deck.user_id == user_id).first()
+        if not deck:
+            deck = Deck(name=deck_name, user_id=user_id)
+            db.add(deck)
+            db.commit()
+            db.refresh(deck)
 
-    # Extract checklist text if provided
-    checklist_text = None
-    if checklist_file and checklist_file.filename:
-        try:
-            checklist_bytes = await checklist_file.read()
-            checklist_text = extract_text(checklist_bytes, checklist_file.filename or "checklist.pdf")
-            logger.info(f"Checklist loaded: {len(checklist_text or '')} chars")
-        except Exception as e:
-            logger.warning(f"Could not read checklist: {e}")
+        created = 0
+        skipped = 0
+        results: list = []
 
-    # Find or create deck
-    deck = (
-        db.query(Deck)
-        .filter(Deck.name == deck_name, Deck.user_id == current_user.id)
-        .first()
-    )
-    if not deck:
-        deck = Deck(name=deck_name, user_id=current_user.id)
-        db.add(deck)
-        db.flush()
+        def _process_page_sync(page: dict) -> dict:
+            import requests as _requests
+            image_path = page["image_path"]
+            img_w = int(page["width"])
+            img_h = int(page["height"])
+            page_num = page.get("page", 1)
+            source_pdf = page.get("source_pdf")
+            render_scale = float(page.get("render_scale", 2.0))
 
-    created = 0
-    skipped = 0
-    results = []
+            zones: list = []
+            diagram_specs: list = []
 
-    user_dir = os.path.join(_ABS_UPLOAD_DIR, str(current_user.id))
-    os.makedirs(user_dir, exist_ok=True)
-
-    def _process_page_sync(page: dict) -> dict:
-        """Run all AI work for one page in a thread. Returns a result dict."""
-        import requests as _requests
-        image_path = page["image_path"]
-        img_w = int(page["width"])
-        img_h = int(page["height"])
-        page_num = page.get("page", 1)
-        source_pdf = page.get("source_pdf")
-        render_scale = float(page.get("render_scale", 2.0))  # default 2.0 for old clients
-
-        zones = []
-        diagram_specs = []
-
-        # ── Step 1: Try PDF word-position extraction (highest accuracy) ──────
-        if source_pdf:
-            abs_pdf = _resolve_upload_path(source_pdf)
-            try:
-                import fitz
-                doc = fitz.open(abs_pdf)
-                fitz_page = doc[page_num - 1]
-                zones = zones_for_pdf_page(fitz_page, scale=render_scale, checklist_text=checklist_text)
+            if source_pdf:
+                abs_pdf = _resolve_upload_path(source_pdf)
                 try:
-                    diagram_specs = diagram_cards_for_pdf_page(fitz_page)
+                    import fitz
+                    doc = fitz.open(abs_pdf)
+                    fitz_page = doc[page_num - 1]
+                    zones = zones_for_pdf_page(fitz_page, scale=render_scale, checklist_text=checklist_text)
+                    try:
+                        diagram_specs = diagram_cards_for_pdf_page(fitz_page)
+                    except Exception as e:
+                        logger.warning(f"Diagram detection failed on page {page_num}: {e}")
+                    doc.close()
                 except Exception as e:
-                    logger.warning(f"Diagram detection failed on page {page_num}: {e}")
-                doc.close()
-            except Exception as e:
-                logger.warning(f"PDF processing failed for page {page_num}: {e}")
-                # Don't return error — fall through to vision model below
+                    logger.warning(f"PDF processing failed for page {page_num}: {e}")
 
-        # ── Step 2: If no zones yet, use vision model on the rendered image ──
-        # This handles: image-heavy slides, slides without detectable text
-        # formatting, PDF not available (ephemeral filesystem), etc.
-        if not zones:
-            image_bytes: Optional[bytes] = None
-            if image_path.startswith("http"):
-                try:
-                    r = _requests.get(image_path, timeout=30)
-                    r.raise_for_status()
-                    image_bytes = r.content
-                except Exception as e:
-                    logger.warning(f"Could not fetch image for page {page_num}: {e}")
-            else:
-                abs_path = _resolve_upload_path(image_path)
-                if os.path.exists(abs_path):
-                    with open(abs_path, "rb") as f:
-                        image_bytes = f.read()
+            if not zones:
+                image_bytes: Optional[bytes] = None
+                if image_path.startswith("http"):
+                    try:
+                        r = _requests.get(image_path, timeout=30)
+                        r.raise_for_status()
+                        image_bytes = r.content
+                    except Exception as e:
+                        logger.warning(f"Could not fetch image for page {page_num}: {e}")
                 else:
-                    logger.warning(f"Image not found for page {page_num}: {abs_path}")
+                    abs_path = _resolve_upload_path(image_path)
+                    if os.path.exists(abs_path):
+                        with open(abs_path, "rb") as f:
+                            image_bytes = f.read()
+                    else:
+                        logger.warning(f"Image not found for page {page_num}: {abs_path}")
 
-            if image_bytes:
-                logger.info(f"Using vision model fallback for page {page_num}")
-                zones = zones_for_image(image_bytes, img_w, img_h, checklist_text=checklist_text)
-            elif not source_pdf:
-                # Image was the only option and it couldn't be loaded — real error
-                reason = "could not fetch image" if image_path.startswith("http") else "file not found"
-                return {"page": page_num, "status": "error", "reason": reason,
-                        "image_path": image_path, "img_w": img_w, "img_h": img_h,
-                        "zones": [], "diagram_specs": []}
+                if image_bytes:
+                    zones = zones_for_image(image_bytes, img_w, img_h, checklist_text=checklist_text)
+                elif not source_pdf:
+                    reason = "could not fetch image" if image_path.startswith("http") else "file not found"
+                    return {"page": page_num, "status": "error", "reason": reason,
+                            "image_path": image_path, "img_w": img_w, "img_h": img_h,
+                            "zones": [], "diagram_specs": []}
 
-        return {
-            "page": page_num,
-            "image_path": image_path,
-            "img_w": img_w,
-            "img_h": img_h,
-            "zones": zones,
-            "diagram_specs": diagram_specs,
-        }
+            return {"page": page_num, "image_path": image_path, "img_w": img_w,
+                    "img_h": img_h, "zones": zones, "diagram_specs": diagram_specs}
 
-    # Stream results back as each page completes — keeps the connection alive
-    # so Render's proxy (30 s idle timeout) doesn't kill long-running jobs.
-    async def stream_results():
-        nonlocal created, skipped
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=min(len(pages), 8)) as executor:
             futures = [loop.run_in_executor(executor, _process_page_sync, p) for p in pages]
@@ -329,34 +296,20 @@ async def batch_occlusion(
 
                 if pr.get("status") == "error":
                     skipped += 1
-                    page_result: dict = {"page": page_num, "status": "error", "reason": pr.get("reason", "")}
-                    results.append(page_result)
-                    yield json.dumps({"type": "page", **page_result}) + "\n"
+                    results.append({"page": page_num, "status": "error", "reason": pr.get("reason", "")})
+                    _batch_jobs[job_id]["done"] = len(results)
                     continue
 
-                page_result = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
+                page_result: dict = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
 
                 if zones:
-                    card = Card(
-                        deck_id=deck.id,
-                        card_type="occlusion",
-                        front="",
-                        back="",
-                        image_path=image_path,
-                        image_width=img_w,
-                        image_height=img_h,
-                    )
+                    card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
+                                image_path=image_path, image_width=img_w, image_height=img_h)
                     db.add(card)
                     db.flush()
                     for z in zones:
-                        db.add(OcclusionZone(
-                            card_id=card.id,
-                            label=z["label"],
-                            x=z["x"],
-                            y=z["y"],
-                            width=z["width"],
-                            height=z["height"],
-                        ))
+                        db.add(OcclusionZone(card_id=card.id, label=z["label"],
+                                             x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
                     created += 1
                     page_result["status"] = "created"
                     page_result["zones"] = len(zones)
@@ -369,52 +322,96 @@ async def batch_occlusion(
                     diag_name = f"{uuid.uuid4()}.{diag_ext}"
                     with open(os.path.join(user_dir, diag_name), "wb") as f:
                         f.write(spec["image_bytes"])
-                    local_diag_path = f"/uploads/{current_user.id}/{diag_name}"
+                    local_diag_path = f"/uploads/{user_id}/{diag_name}"
                     diag_ct = "image/jpeg" if diag_ext in ("jpg", "jpeg") else "image/png"
-                    supabase_diag_url = storage_upload(spec["image_bytes"], f"{current_user.id}/{diag_name}", diag_ct)
-                    diag_image_path = supabase_diag_url or local_diag_path
-                    diag_card = Card(
-                        deck_id=deck.id,
-                        card_type="occlusion",
-                        front="",
-                        back="",
-                        image_path=diag_image_path,
-                        image_width=spec["width"],
-                        image_height=spec["height"],
-                    )
+                    supabase_diag_url = storage_upload(spec["image_bytes"], f"{user_id}/{diag_name}", diag_ct)
+                    diag_card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
+                                     image_path=supabase_diag_url or local_diag_path,
+                                     image_width=spec["width"], image_height=spec["height"])
                     db.add(diag_card)
                     db.flush()
                     for z in spec["zones"]:
-                        db.add(OcclusionZone(
-                            card_id=diag_card.id,
-                            label=z["label"],
-                            x=z["x"],
-                            y=z["y"],
-                            width=z["width"],
-                            height=z["height"],
-                        ))
+                        db.add(OcclusionZone(card_id=diag_card.id, label=z["label"],
+                                             x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
                     created += 1
                     page_result["diagrams"] = page_result.get("diagrams", 0) + 1
                     if page_result["status"] == "skipped":
                         page_result["status"] = "created"
 
                 results.append(page_result)
-                yield json.dumps({"type": "page", **page_result}) + "\n"
+                _batch_jobs[job_id]["done"] = len(results)
 
         db.commit()
-        yield json.dumps({
-            "type": "done",
+        _batch_jobs[job_id].update({
+            "status": "done",
             "created": created,
             "skipped": skipped,
             "deck_id": deck.id,
             "results": results,
-        }) + "\n"
+        })
+        logger.info(f"Job {job_id}: done — {created} created, {skipped} skipped")
+    except Exception as exc:
+        logger.error(f"Job {job_id} failed: {exc}")
+        _batch_jobs[job_id]["status"] = "error"
+        _batch_jobs[job_id]["error"] = str(exc)
+    finally:
+        db.close()
 
-    return StreamingResponse(
-        stream_results(),
-        media_type="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-    )
+
+@router.post("/batch-occlusion")
+@limiter.limit("10/hour")
+async def batch_occlusion(
+    request: Request,
+    deck_name: str = Form(...),
+    pages_json: str = Form(...),
+    checklist_file: Optional[UploadFile] = File(None),
+    current_user: User = Depends(get_active_user),
+):
+    """Start a background AI occlusion job. Returns job_id immediately; poll /batch-occlusion/status/{job_id}."""
+    try:
+        pages = json.loads(pages_json)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid pages_json")
+
+    checklist_text = None
+    if checklist_file and checklist_file.filename:
+        try:
+            checklist_bytes = await checklist_file.read()
+            checklist_text = extract_text(checklist_bytes, checklist_file.filename or "checklist.pdf")
+        except Exception as e:
+            logger.warning(f"Could not read checklist: {e}")
+
+    user_dir = os.path.join(_ABS_UPLOAD_DIR, str(current_user.id))
+    os.makedirs(user_dir, exist_ok=True)
+
+    job_id = uuid.uuid4().hex
+    _batch_jobs[job_id] = {
+        "status": "processing",
+        "done": 0,
+        "total": len(pages),
+        "expires_at": _time.time() + 7200,  # 2-hour TTL
+    }
+    _cleanup_old_jobs()
+
+    task = asyncio.create_task(_run_batch_occlusion_job(
+        job_id=job_id, pages=pages, deck_name=deck_name,
+        user_dir=user_dir, checklist_text=checklist_text, user_id=current_user.id,
+    ))
+    _batch_jobs[job_id]["_task"] = task  # prevent GC
+
+    return {"job_id": job_id, "total": len(pages)}
+
+
+@router.get("/batch-occlusion/status/{job_id}")
+async def batch_occlusion_status(
+    job_id: str,
+    current_user: User = Depends(get_active_user),
+):
+    """Poll for the status of a background batch-occlusion job."""
+    job = _batch_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return {k: v for k, v in job.items() if not k.startswith("_")}
 
 
 @router.post("/occlusion", response_model=CardOut)
