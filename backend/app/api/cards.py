@@ -143,7 +143,7 @@ async def upload_pages(
         page = {"image_path": supabase_url or local_path, "width": w, "height": h, "page": 1}
         return {"pages": [page]}
 
-    # ── PDF: stream pages as they are rendered + uploaded ────────────────────
+    # ── PDF: render + upload one page at a time to cap memory usage ─────────
     try:
         import fitz
     except ImportError:
@@ -153,48 +153,47 @@ async def upload_pages(
     pdf_abs = os.path.join(user_dir, pdf_name)
     with open(pdf_abs, "wb") as f:
         f.write(content)
+    del content  # free raw PDF bytes from memory
     source_pdf_url = f"/uploads/{current_user.id}/{pdf_name}"
+
+    _RENDER_SCALE = 2  # 144 DPI — sharp enough for AI + display, half the RAM of 3×
 
     doc = fitz.open(pdf_abs)
     page_count = len(doc)
-    _RENDER_SCALE = 3
-    # Pre-collect page sizes before closing doc (fitz not thread-safe)
-    page_rects = [(i, page.rect) for i, page in enumerate(doc)]
     doc.close()
 
-    def _render_and_upload(page_index: int) -> dict:
-        """Render one PDF page and upload it. Runs in a thread."""
-        import fitz as _fitz
-        _doc = _fitz.open(pdf_abs)
-        _mat = _fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE)
-        pix = _doc[page_index].get_pixmap(matrix=_mat)
-        img_name = f"{uuid.uuid4()}.png"
-        img_abs = os.path.join(user_dir, img_name)
-        pix.save(img_abs)
-        img_bytes = pix.tobytes("png")
-        w, h = pix.width, pix.height
-        _doc.close()
-        local_path = f"/uploads/{current_user.id}/{img_name}"
-        supabase_url = storage_upload(img_bytes, f"{current_user.id}/{img_name}")
-        return {
-            "image_path": supabase_url or local_path,
-            "width": w,
-            "height": h,
-            "page": page_index + 1,
-            "source_pdf": source_pdf_url,
-            "render_scale": _RENDER_SCALE,
-        }
-
     async def stream_pages():
-        yield json.dumps({"type": "total", "total": page_count}) + "\n"
         loop = asyncio.get_event_loop()
         pages = []
-        with ThreadPoolExecutor(max_workers=min(page_count, 8)) as executor:
-            futures = [loop.run_in_executor(executor, _render_and_upload, i) for i, _ in page_rects]
-            for fut in asyncio.as_completed(futures):
-                page_data = await fut
-                pages.append(page_data)
-                yield json.dumps({"type": "page", **page_data}) + "\n"
+        yield json.dumps({"type": "total", "total": page_count}) + "\n"
+
+        for page_index in range(page_count):
+            # Render one page at a time — only one pixmap in RAM at a time
+            def _render_one(idx: int) -> dict:
+                import fitz as _fitz
+                _doc = _fitz.open(pdf_abs)
+                pix = _doc[idx].get_pixmap(matrix=_fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE))
+                img_name = f"{uuid.uuid4()}.png"
+                img_abs = os.path.join(user_dir, img_name)
+                pix.save(img_abs)
+                w, h = pix.width, pix.height
+                pix = None  # free pixmap before upload
+                _doc.close()
+                # Read from disk and upload, then we can let it be GC'd
+                with open(img_abs, "rb") as fh:
+                    img_bytes = fh.read()
+                supabase_url = storage_upload(img_bytes, f"{current_user.id}/{img_name}")
+                img_bytes = None  # free upload buffer
+                return {
+                    "image_path": supabase_url or f"/uploads/{current_user.id}/{img_name}",
+                    "width": w, "height": h, "page": idx + 1,
+                    "source_pdf": source_pdf_url, "render_scale": _RENDER_SCALE,
+                }
+
+            page_data = await loop.run_in_executor(None, _render_one, page_index)
+            pages.append(page_data)
+            yield json.dumps({"type": "page", **page_data}) + "\n"
+
         yield json.dumps({"type": "done", "pages": pages}) + "\n"
 
     return StreamingResponse(
@@ -283,7 +282,7 @@ async def _run_batch_occlusion_job(
                     "img_h": img_h, "zones": zones, "diagram_specs": diagram_specs}
 
         loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=min(len(pages), 8)) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(pages), 3)) as executor:
             futures = [loop.run_in_executor(executor, _process_page_sync, p) for p in pages]
             for fut in asyncio.as_completed(futures):
                 pr = await fut
