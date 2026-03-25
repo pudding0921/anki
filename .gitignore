@@ -35,3 +35,4 @@ Thumbs.db
 # Uploads / generated
 backend/uploads/
 backend/app/static/
+.vercel
