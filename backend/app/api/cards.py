@@ -29,7 +29,7 @@ def _get_semaphore() -> asyncio.Semaphore:
         _PROCESSING_SEMAPHORE = asyncio.Semaphore(4)
     return _PROCESSING_SEMAPHORE
 
-MAX_PDF_PAGES = 60  # refuse uploads that would balloon memory
+MAX_PDF_PAGES = 200  # soft cap — semaphore protects memory, this just prevents absurd uploads
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ async def upload_pages(
     if page_count > MAX_PDF_PAGES:
         raise HTTPException(
             status_code=413,
-            detail=f"PDF has {page_count} pages — maximum is {MAX_PDF_PAGES}. Split the file and upload in parts."
+            detail=f"PDF has {page_count} pages — maximum is {MAX_PDF_PAGES} pages per upload."
         )
 
     async def stream_pages():
