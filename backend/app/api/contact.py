@@ -21,6 +21,10 @@ class ContactRequest(BaseModel):
     message: str = Field(..., max_length=5000)
 
 
+def _html_escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _send_email(body: ContactRequest) -> None:
     """Send a contact form notification via Resend."""
     if not settings.RESEND_API_KEY:
@@ -28,6 +32,10 @@ def _send_email(body: ContactRequest) -> None:
         return
 
     resend.api_key = settings.RESEND_API_KEY
+
+    name = _html_escape(body.name)
+    subject = _html_escape(body.subject)
+    message = _html_escape(body.message)
 
     html = f"""
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;color:#1a1a2e">
@@ -37,14 +45,14 @@ def _send_email(body: ContactRequest) -> None:
       <div style="border:1px solid #e2e8f0;border-top:none;padding:28px 32px;border-radius:0 0 12px 12px;background:#fff">
         <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
           <tr><td style="padding:8px 0;color:#64748b;font-size:13px;width:80px">From</td>
-              <td style="padding:8px 0;font-weight:600">{body.name} &lt;{body.email}&gt;</td></tr>
+              <td style="padding:8px 0;font-weight:600">{name} &lt;{body.email}&gt;</td></tr>
           <tr><td style="padding:8px 0;color:#64748b;font-size:13px">Subject</td>
-              <td style="padding:8px 0;font-weight:600">{body.subject}</td></tr>
+              <td style="padding:8px 0;font-weight:600">{subject}</td></tr>
         </table>
         <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 20px">
-        <p style="white-space:pre-wrap;line-height:1.7;color:#334155;margin:0">{body.message}</p>
+        <p style="white-space:pre-wrap;line-height:1.7;color:#334155;margin:0">{message}</p>
         <div style="margin-top:28px;padding:16px;background:#f8fafc;border-radius:8px;font-size:12px;color:#94a3b8">
-          Reply to this email to respond directly to {body.name}.
+          Reply to this email to respond directly to {name}.
         </div>
       </div>
     </div>

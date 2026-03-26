@@ -46,7 +46,7 @@ def _link_stripe_session(user: User, session_id: str) -> None:
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/minute")
-def register(request: Request, payload: UserRegister, db: Session = Depends(get_db)):
+async def register(request: Request, payload: UserRegister, db: Session = Depends(get_db)):
     if len(payload.password) < 8:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters")
     if db.query(User).filter(User.email == payload.email).first():
@@ -63,7 +63,10 @@ def register(request: Request, payload: UserRegister, db: Session = Depends(get_
         if not invite:
             raise HTTPException(status_code=400, detail="Invalid or already used invite code")
 
-    user = User(email=payload.email, hashed_password=hash_password(payload.password))
+    # Run bcrypt in a thread so it doesn't block the event loop (~500ms on 0.5 vCPU)
+    loop = asyncio.get_running_loop()
+    hashed = await loop.run_in_executor(None, hash_password, payload.password)
+    user = User(email=payload.email, hashed_password=hashed)
     db.add(user)
     db.flush()
 
@@ -102,8 +105,10 @@ def me(current_user: User = Depends(get_current_user)):
 
 
 @router.put("/email", response_model=UserOut)
-def change_email(payload: ChangeEmailRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not verify_password(payload.current_password, current_user.hashed_password):
+async def change_email(payload: ChangeEmailRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    loop = asyncio.get_running_loop()
+    valid = await loop.run_in_executor(None, verify_password, payload.current_password, current_user.hashed_password)
+    if not valid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
     if db.query(User).filter(User.email == payload.new_email, User.id != current_user.id).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already in use")
@@ -114,11 +119,14 @@ def change_email(payload: ChangeEmailRequest, current_user: User = Depends(get_c
 
 
 @router.put("/password")
-def change_password(payload: ChangePasswordRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if not verify_password(payload.current_password, current_user.hashed_password):
+async def change_password(payload: ChangePasswordRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    loop = asyncio.get_running_loop()
+    valid = await loop.run_in_executor(None, verify_password, payload.current_password, current_user.hashed_password)
+    if not valid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Current password is incorrect")
     if len(payload.new_password) < 8:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 8 characters")
-    current_user.hashed_password = hash_password(payload.new_password)
+    hashed = await loop.run_in_executor(None, hash_password, payload.new_password)
+    current_user.hashed_password = hashed
     db.commit()
     return {"ok": True}

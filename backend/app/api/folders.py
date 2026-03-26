@@ -4,7 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.deps import get_active_user
 from app.database import get_db
@@ -93,13 +93,17 @@ def rename_folder(
         raise HTTPException(status_code=404, detail="Folder not found")
     folder.name = payload.name.strip() or folder.name
     db.commit()
-    db.refresh(folder)
+    deck_count = (
+        db.query(func.count(Deck.id))
+        .filter(Deck.folder_id == folder_id, Deck.deleted_at == None)
+        .scalar()
+    ) or 0
     return FolderOut(
         id=folder.id,
         name=folder.name,
         user_id=folder.user_id,
         created_at=folder.created_at,
-        deck_count=len([d for d in folder.decks if d.deleted_at is None]),
+        deck_count=deck_count,
     )
 
 
@@ -139,7 +143,7 @@ def move_deck(
     if payload.folder_id is not None:
         folder = (
             db.query(Folder)
-            .filter(Folder.id == payload.folder_id, Folder.user_id == current_user.id)
+            .filter(Folder.id == payload.folder_id, Folder.user_id == current_user.id, Folder.deleted_at == None)
             .first()
         )
         if not folder:

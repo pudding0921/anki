@@ -24,7 +24,12 @@ def get_due_cards(
     now = datetime.now(timezone.utc)
     due_cards = (
         db.query(Card)
-        .filter(Card.deck_id == deck_id, Card.sm2_due_date <= now, Card.deleted_at == None)
+        .filter(
+            Card.deck_id == deck_id,
+            Card.deleted_at == None,
+            # NULL due_date means card predates the SM-2 migration — treat as immediately due
+            (Card.sm2_due_date == None) | (Card.sm2_due_date <= now),
+        )
         .all()
     )
     return due_cards
@@ -39,7 +44,7 @@ def submit_review(
     card = (
         db.query(Card)
         .join(Deck)
-        .filter(Card.id == payload.card_id, Deck.user_id == current_user.id)
+        .filter(Card.id == payload.card_id, Deck.user_id == current_user.id, Card.deleted_at == None)
         .first()
     )
     if not card:

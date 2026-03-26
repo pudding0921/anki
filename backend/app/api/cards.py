@@ -185,7 +185,7 @@ async def upload_pages(
     if os.environ.get("MODAL_TOKEN_ID"):
         try:
             from app.services.modal_tasks import render_pdf_pages
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             pages = await loop.run_in_executor(
                 None, render_pdf_pages.remote, content, current_user.id
             )
@@ -218,7 +218,7 @@ async def upload_pages(
             except ImportError:
                 yield json.dumps({"type": "error", "detail": "PDF rendering unavailable — Modal not configured"}) + "\n"
                 return
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             pages = []
             yield json.dumps({"type": "total", "total": page_count}) + "\n"
 
@@ -285,7 +285,7 @@ async def _run_batch_occlusion_job_inner(
     # causing psycopg2.OperationalError when we finally try to INSERT cards.
     db = SessionLocal()
     try:
-        deck = db.query(Deck).filter(Deck.name == deck_name, Deck.user_id == user_id).first()
+        deck = db.query(Deck).filter(Deck.name == deck_name, Deck.user_id == user_id, Deck.deleted_at == None).first()
         if not deck:
             deck = Deck(name=deck_name, user_id=user_id)
             db.add(deck)
@@ -411,7 +411,7 @@ async def _run_batch_occlusion_job_inner(
 
                 # Only call analyze_page for image slides or checklist re-extraction
                 if pages_for_vision:
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     inputs = [(p, checklist_text) for p in pages_for_vision]
 
                     def _run_starmap():
@@ -462,7 +462,7 @@ async def _run_batch_occlusion_job_inner(
                 logger.warning(f"Modal analyze failed for job {job_id}, falling back to local: {exc}")
 
         # ── Local fallback — open fresh session, process pages with 3 workers ─
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         local_results = []
         with ThreadPoolExecutor(max_workers=min(len(pages), 3)) as executor:
             futures = [loop.run_in_executor(executor, _process_page_sync, p) for p in pages]
@@ -608,7 +608,7 @@ def create_occlusion_card(
 ):
     deck = (
         db.query(Deck)
-        .filter(Deck.name == payload.deck_name, Deck.user_id == current_user.id)
+        .filter(Deck.name == payload.deck_name, Deck.user_id == current_user.id, Deck.deleted_at == None)
         .first()
     )
     if not deck:

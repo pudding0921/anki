@@ -1,7 +1,8 @@
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.deps import get_active_user
 from app.database import get_db
@@ -62,10 +63,24 @@ def get_trash(
         .filter(Deck.user_id == current_user.id, Deck.deleted_at != None)
         .all()
     )
-    # Only show individually-trashed cards (deck itself is not trashed)
+
+    # Batch card counts for trashed decks — one query instead of N lazy loads
+    trashed_deck_ids = [d.id for d in decks]
+    deck_card_counts: dict = {}
+    if trashed_deck_ids:
+        deck_card_counts = dict(
+            db.query(Card.deck_id, func.count(Card.id))
+            .filter(Card.deck_id.in_(trashed_deck_ids), Card.deleted_at == None)
+            .group_by(Card.deck_id)
+            .all()
+        )
+
+    # Only show individually-trashed cards (deck itself is not trashed).
+    # Use joinedload to avoid N+1 on card.deck.name
     cards = (
         db.query(Card)
         .join(Deck)
+        .options(joinedload(Card.deck))
         .filter(
             Deck.user_id == current_user.id,
             Card.deleted_at != None,
@@ -88,7 +103,7 @@ def get_trash(
                 id=d.id,
                 name=d.name,
                 description=d.description,
-                card_count=len([c for c in d.cards if c.deleted_at is None]),
+                card_count=deck_card_counts.get(d.id, 0),
                 deleted_at=d.deleted_at,
                 days_remaining=_days_remaining(d.deleted_at),
             )

@@ -162,11 +162,12 @@ def cancel_subscription(
             status="active",
             limit=1,
         )
-        if subscriptions.data:
-            sub = stripe.Subscription.modify(subscriptions.data[0].id, cancel_at_period_end=True)
-            end_ts = sub.get("current_period_end")
-            if end_ts:
-                current_user.subscription_end = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+        if not subscriptions.data:
+            raise HTTPException(status_code=400, detail="No active Stripe subscription found")
+        sub = stripe.Subscription.modify(subscriptions.data[0].id, cancel_at_period_end=True)
+        end_ts = sub.get("current_period_end")
+        if end_ts:
+            current_user.subscription_end = datetime.fromtimestamp(end_ts, tz=timezone.utc)
     except stripe.error.StripeError as e:
         raise HTTPException(status_code=400, detail=getattr(e, "user_message", str(e)))
 
