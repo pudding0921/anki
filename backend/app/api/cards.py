@@ -156,9 +156,9 @@ async def upload_pages(
         page = {"image_path": supabase_url or local_path, "width": w, "height": h, "page": 1}
         return {"pages": [page]}
 
-    # ── PDF: render + upload one page at a time to cap memory usage ─────────
+    # ── PDF: check page cap ───────────────────────────────────────────────────
     try:
-        import fitz
+        import fitz as _fitz_check
     except ImportError:
         raise HTTPException(status_code=500, detail="PyMuPDF not installed")
 
@@ -166,14 +166,10 @@ async def upload_pages(
     pdf_abs = os.path.join(user_dir, pdf_name)
     with open(pdf_abs, "wb") as f:
         f.write(content)
-    del content  # free raw PDF bytes from memory
-    source_pdf_url = f"/uploads/{current_user.id}/{pdf_name}"
 
-    _RENDER_SCALE = 2  # 144 DPI — sharp enough for AI + display, half the RAM of 3×
-
-    doc = fitz.open(pdf_abs)
-    page_count = len(doc)
-    doc.close()
+    _doc_check = _fitz_check.open(pdf_abs)
+    page_count = len(_doc_check)
+    _doc_check.close()
 
     if page_count > MAX_PDF_PAGES:
         raise HTTPException(
@@ -181,25 +177,54 @@ async def upload_pages(
             detail=f"PDF has {page_count} pages — maximum is {MAX_PDF_PAGES} pages per upload."
         )
 
+    # ── Modal path: offload rendering to serverless containers ───────────────
+    if os.environ.get("MODAL_TOKEN_ID"):
+        try:
+            from app.services.modal_tasks import render_pdf_pages
+            loop = asyncio.get_event_loop()
+            pages = await loop.run_in_executor(
+                None, render_pdf_pages.remote, content, current_user.id
+            )
+            del content
+
+            async def stream_modal_pages():
+                yield json.dumps({"type": "total", "total": len(pages)}) + "\n"
+                for p in pages:
+                    yield json.dumps({"type": "page", **p}) + "\n"
+                yield json.dumps({"type": "done", "pages": pages}) + "\n"
+
+            return StreamingResponse(
+                stream_modal_pages(),
+                media_type="application/x-ndjson",
+                headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+            )
+        except Exception as exc:
+            logger.warning(f"Modal render_pdf_pages failed, falling back to local: {exc}")
+
+    # ── Local fallback: render one page at a time ─────────────────────────────
+    del content  # free raw PDF bytes — already saved to disk above
+    source_pdf_url = f"/uploads/{current_user.id}/{pdf_name}"
+    _RENDER_SCALE = 2
+
     async def stream_pages():
         sem = _get_semaphore()
-        async with sem:  # only N uploads render simultaneously
+        async with sem:
+            import fitz as _fitz
             loop = asyncio.get_event_loop()
             pages = []
             yield json.dumps({"type": "total", "total": page_count}) + "\n"
 
             for page_index in range(page_count):
                 def _render_one(idx: int) -> dict:
-                    import fitz as _fitz
                     _doc = _fitz.open(pdf_abs)
                     pix = _doc[idx].get_pixmap(matrix=_fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE))
                     img_name = f"{uuid.uuid4()}.png"
-                    img_abs = os.path.join(user_dir, img_name)
-                    pix.save(img_abs)
+                    img_abs_path = os.path.join(user_dir, img_name)
+                    pix.save(img_abs_path)
                     w, h = pix.width, pix.height
                     pix = None
                     _doc.close()
-                    with open(img_abs, "rb") as fh:
+                    with open(img_abs_path, "rb") as fh:
                         img_bytes = fh.read()
                     supabase_url = storage_upload(img_bytes, f"{current_user.id}/{img_name}")
                     img_bytes = None
@@ -310,6 +335,73 @@ async def _run_batch_occlusion_job_inner(
             return {"page": page_num, "image_path": image_path, "img_w": img_w,
                     "img_h": img_h, "zones": zones, "diagram_specs": diagram_specs}
 
+        # ── Modal path: all pages analyzed in parallel across serverless containers
+        if os.environ.get("MODAL_TOKEN_ID"):
+            try:
+                from app.services.modal_tasks import analyze_page as _modal_analyze
+                # Inject user_id so Modal can upload diagram images to the right path
+                pages_with_uid = [{**p, "_user_id": user_id} for p in pages]
+                inputs = [(p, checklist_text) for p in pages_with_uid]
+                loop = asyncio.get_event_loop()
+
+                def _run_starmap():
+                    return list(_modal_analyze.starmap(inputs))
+
+                all_results = await loop.run_in_executor(None, _run_starmap)
+                for pr in all_results:
+                    page_num = pr["page"]
+                    image_path = pr["image_path"]
+                    img_w = pr["img_w"]
+                    img_h = pr["img_h"]
+                    zones = pr["zones"]
+                    diagram_specs = pr["diagram_specs"]  # already have image_path (URL)
+
+                    page_result: dict = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
+
+                    if zones:
+                        card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
+                                    image_path=image_path, image_width=img_w, image_height=img_h)
+                        db.add(card)
+                        db.flush()
+                        for z in zones:
+                            db.add(OcclusionZone(card_id=card.id, label=z["label"],
+                                                 x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
+                        created += 1
+                        page_result["status"] = "created"
+                        page_result["zones"] = len(zones)
+                    else:
+                        skipped += 1
+                        page_result["reason"] = "no text zones found"
+
+                    # diagram_specs from Modal already have image_path (URL) — no upload needed
+                    for spec in diagram_specs:
+                        diag_card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
+                                         image_path=spec["image_path"],
+                                         image_width=spec["width"], image_height=spec["height"])
+                        db.add(diag_card)
+                        db.flush()
+                        for z in spec["zones"]:
+                            db.add(OcclusionZone(card_id=diag_card.id, label=z["label"],
+                                                 x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
+                        created += 1
+                        page_result["diagrams"] = page_result.get("diagrams", 0) + 1
+                        if page_result["status"] == "skipped":
+                            page_result["status"] = "created"
+
+                    results.append(page_result)
+                    _batch_jobs[job_id]["done"] = len(results)
+
+                db.commit()
+                _batch_jobs[job_id].update({
+                    "status": "done", "created": created, "skipped": skipped,
+                    "deck_id": deck.id, "results": results,
+                })
+                logger.info(f"Job {job_id} (Modal): done — {created} created, {skipped} skipped")
+                return
+            except Exception as exc:
+                logger.warning(f"Modal analyze failed for job {job_id}, falling back to local: {exc}")
+
+        # ── Local fallback ────────────────────────────────────────────────────
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=min(len(pages), 3)) as executor:
             futures = [loop.run_in_executor(executor, _process_page_sync, p) for p in pages]
