@@ -10,10 +10,24 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [justRegistered, setJustRegistered] = useState(false);
+  const [warming, setWarming] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("registered") === "1") setJustRegistered(true);
+
+    // Pre-warm the backend: ping health endpoint so cold-start happens while
+    // the user types, not after they click "Log in".
+    const warmStart = Date.now();
+    let warmTimer: ReturnType<typeof setTimeout>;
+    warmTimer = setTimeout(() => setWarming(true), 1500);
+    fetch(`${API_URL}/api/health`)
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(warmTimer);
+        if (Date.now() - warmStart > 1500) setWarming(false);
+      });
+    return () => clearTimeout(warmTimer);
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -67,6 +81,11 @@ export default function LoginPage() {
           {justRegistered && (
             <div className="text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
               Account created! Sign in to start studying.
+            </div>
+          )}
+          {warming && !error && (
+            <div className="text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">
+              Server is waking up — login will be ready in a moment.
             </div>
           )}
           {error && (
