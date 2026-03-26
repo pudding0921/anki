@@ -52,18 +52,21 @@ _secret = modal.Secret.from_name("flowcard-secrets")
 @app.function(secrets=[_secret], timeout=600, memory=2048)
 def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
     """
-    Render every page of a PDF at 2× scale and upload each image to Supabase.
-    Also uploads the raw PDF so analyze_page can do text-position extraction.
-    Returns a list of page info dicts.
-    Runs in its own Modal container — never shares memory with Render.
+    Render every page of a PDF at 2x scale, upload each image to Supabase,
+    and pre-extract text zones using PDF text positions (fast, CPU-only).
+
+    Pre-extracting zones here means analyze_page only needs to run for slides
+    with no extractable text (pure image slides), typically 10-20% of a deck.
+    Returns a list of page info dicts with pre_zones set.
     """
     sys.path.insert(0, "/")
     import fitz
     from app.services.storage import upload_file as _upload
+    from app.services.ai_occlusion import zones_for_pdf_page as _zones_fn
 
     RENDER_SCALE = 2
 
-    # Upload the original PDF so analyze_page can download it for text extraction
+    # Upload the original PDF so analyze_page can use it as fallback
     pdf_key = f"{user_id}/{uuid.uuid4()}.pdf"
     source_pdf_url = _upload(pdf_bytes, pdf_key, "application/pdf") or ""
 
@@ -75,6 +78,7 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
     pages = []
 
     for i, page in enumerate(doc):
+        # Render page image
         pix = page.get_pixmap(matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE))
         img_bytes = pix.tobytes("png")
         w, h = pix.width, pix.height
@@ -84,6 +88,14 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
         img_url = _upload(img_bytes, img_key, "image/png")
         img_bytes = None  # free after upload
 
+        # Pre-extract text zones (pure CPU, no API calls — fast)
+        # None means extraction failed; [] means no text found (image slide)
+        try:
+            pre_zones = _zones_fn(page, scale=RENDER_SCALE)
+        except Exception as e:
+            logger.warning(f"Zone pre-extraction failed p{i+1}: {e}")
+            pre_zones = None
+
         pages.append({
             "image_path": img_url,
             "width": w,
@@ -91,6 +103,7 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
             "page": i + 1,
             "source_pdf": source_pdf_url,
             "render_scale": RENDER_SCALE,
+            "pre_zones": pre_zones,  # list (possibly empty) or None if extraction failed
         })
 
     doc.close()
@@ -105,12 +118,12 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
 def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
     """
     Run AI occlusion analysis on one rendered slide.
-    Tries PDF text-position extraction first, falls back to vision model.
-    Uploads any extracted diagram images to Supabase.
-    Returns result dict with zones and diagram_specs (image_path already uploaded).
+
+    If pre_zones is set (from render_pdf_pages), skips PDF re-download entirely
+    and only runs the vision model if pre_zones is empty (image-heavy slide).
+    Falls back to full PDF extraction if pre_zones is None (extraction failed).
     """
     sys.path.insert(0, "/")
-    import fitz
     import requests as _req
     from app.services.ai_occlusion import (
         zones_for_pdf_page,
@@ -126,12 +139,18 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
     source_pdf = page.get("source_pdf", "")
     render_scale = float(page.get("render_scale", 2.0))
     user_id = page.get("_user_id", "unknown")
+    pre_zones = page.get("pre_zones")  # list or None
 
     zones: list = []
     diagram_specs: list = []
 
-    # ── Step 1: PDF text-position extraction (highest accuracy) ──────────────
-    if source_pdf and source_pdf.startswith("http"):
+    if pre_zones is not None:
+        # Text zones already extracted during rendering — no PDF download needed.
+        # pre_zones may be empty [] for image-heavy slides; vision fallback handles those.
+        zones = pre_zones
+    elif source_pdf and source_pdf.startswith("http"):
+        # pre_zones extraction failed — fall back to full PDF extraction
+        import fitz
         try:
             resp = _req.get(source_pdf, timeout=30)
             resp.raise_for_status()
@@ -143,7 +162,6 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
             zones = zones_for_pdf_page(fitz_page, scale=render_scale, checklist_text=checklist_text)
             try:
                 raw_diagrams = diagram_cards_for_pdf_page(fitz_page)
-                # Upload diagram images to Supabase (bytes can't be returned from Modal)
                 for spec in raw_diagrams:
                     ext = spec.get("ext", "png")
                     if ext not in ("png", "jpg", "jpeg"):
@@ -165,7 +183,7 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
         except Exception as e:
             logger.warning(f"PDF analysis failed p{page_num}: {e}")
 
-    # ── Step 2: Vision model fallback ────────────────────────────────────────
+    # Vision model fallback — only runs for image slides (zones still empty)
     if not zones and image_path and image_path.startswith("http"):
         try:
             resp = _req.get(image_path, timeout=30)
@@ -180,5 +198,5 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
         "img_w": img_w,
         "img_h": img_h,
         "zones": zones,
-        "diagram_specs": diagram_specs,  # each has image_path (URL), not image_bytes
+        "diagram_specs": diagram_specs,
     }

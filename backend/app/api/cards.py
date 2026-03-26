@@ -338,37 +338,29 @@ async def _run_batch_occlusion_job_inner(
             return {"page": page_num, "image_path": image_path, "img_w": img_w,
                     "img_h": img_h, "zones": zones, "diagram_specs": diagram_specs}
 
-        # ── Modal path: all pages analyzed in parallel across serverless containers
+        # ── Modal path ────────────────────────────────────────────────────────
         if os.environ.get("MODAL_TOKEN_ID"):
             try:
                 from app.services.modal_tasks import analyze_page as _modal_analyze
-                # Inject user_id so Modal can upload diagram images to the right path
                 pages_with_uid = [{**p, "_user_id": user_id} for p in pages]
-                inputs = [(p, checklist_text) for p in pages_with_uid]
-                loop = asyncio.get_event_loop()
 
-                def _run_starmap():
-                    # Iterate generator so done count updates as each page finishes
-                    out = []
-                    for pr in _modal_analyze.starmap(inputs):
-                        out.append(pr)
-                        _batch_jobs[job_id]["done"] = len(out)
-                    return out
+                # Pages whose text zones were pre-extracted in render_pdf_pages can be
+                # written to DB directly — no analyze_page call needed.
+                # Exception: if checklist_text is set, zones must be re-extracted with
+                # the checklist filter, so all pages go through analyze_page.
+                if checklist_text:
+                    pages_direct: list = []
+                    pages_for_vision = pages_with_uid
+                else:
+                    pages_direct = [p for p in pages_with_uid if p.get("pre_zones")]
+                    pages_for_vision = [p for p in pages_with_uid if not p.get("pre_zones")]
 
-                all_results = await loop.run_in_executor(None, _run_starmap)
-                for pr in all_results:
-                    page_num = pr["page"]
-                    image_path = pr["image_path"]
-                    img_w = pr["img_w"]
-                    img_h = pr["img_h"]
-                    zones = pr["zones"]
-                    diagram_specs = pr["diagram_specs"]  # already have image_path (URL)
-
-                    page_result: dict = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
-
+                def _write_page(p_num, img_path, iw, ih, zones, diag_specs):
+                    nonlocal created, skipped
+                    page_result: dict = {"page": p_num, "status": "skipped", "zones": 0, "diagrams": 0}
                     if zones:
                         card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
-                                    image_path=image_path, image_width=img_w, image_height=img_h)
+                                    image_path=img_path, image_width=iw, image_height=ih)
                         db.add(card)
                         db.flush()
                         for z in zones:
@@ -380,9 +372,7 @@ async def _run_batch_occlusion_job_inner(
                     else:
                         skipped += 1
                         page_result["reason"] = "no text zones found"
-
-                    # diagram_specs from Modal already have image_path (URL) — no upload needed
-                    for spec in diagram_specs:
+                    for spec in diag_specs:
                         diag_card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
                                          image_path=spec["image_path"],
                                          image_width=spec["width"], image_height=spec["height"])
@@ -395,16 +385,45 @@ async def _run_batch_occlusion_job_inner(
                         page_result["diagrams"] = page_result.get("diagrams", 0) + 1
                         if page_result["status"] == "skipped":
                             page_result["status"] = "created"
+                    return page_result
 
-                    results.append(page_result)
+                # Write pre-analyzed pages directly (no Modal call)
+                for p in pages_direct:
+                    pr = _write_page(p["page"], p["image_path"], int(p["width"]), int(p["height"]),
+                                     p["pre_zones"], [])
+                    results.append(pr)
                     _batch_jobs[job_id]["done"] = len(results)
+
+                # Only call analyze_page for image slides or checklist re-extraction
+                if pages_for_vision:
+                    loop = asyncio.get_event_loop()
+                    inputs = [(p, checklist_text) for p in pages_for_vision]
+
+                    def _run_starmap():
+                        out = []
+                        for pr in _modal_analyze.starmap(inputs):
+                            out.append(pr)
+                            _batch_jobs[job_id]["done"] = len(results) + len(out)
+                        return out
+
+                    all_results = await loop.run_in_executor(None, _run_starmap)
+                    for pr in all_results:
+                        page_result = _write_page(
+                            pr["page"], pr["image_path"], pr["img_w"], pr["img_h"],
+                            pr["zones"], pr["diagram_specs"],
+                        )
+                        results.append(page_result)
+                        _batch_jobs[job_id]["done"] = len(results)
 
                 db.commit()
                 _batch_jobs[job_id].update({
                     "status": "done", "created": created, "skipped": skipped,
                     "deck_id": deck.id, "results": results,
                 })
-                logger.info(f"Job {job_id} (Modal): done — {created} created, {skipped} skipped")
+                logger.info(
+                    f"Job {job_id} (Modal): done — {created} created, {skipped} skipped "
+                    f"({len(pages_direct)} direct, {len(pages_for_vision)} via analyze_page)"
+                )
                 return
             except Exception as exc:
                 logger.warning(f"Modal analyze failed for job {job_id}, falling back to local: {exc}")
