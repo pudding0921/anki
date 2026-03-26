@@ -142,31 +142,36 @@ export default function OcclusionPage() {
       if (!uploadRes.ok) { const d = await uploadRes.json().catch(() => ({})); throw new Error(d.detail || "Upload failed"); }
 
       let pages: PageInfo[] = [];
-      const contentType = uploadRes.headers.get("content-type") ?? "";
-      if (contentType.includes("x-ndjson")) {
-        const reader = uploadRes.body?.getReader();
-        if (!reader) throw new Error("Streaming not supported");
-        const decoder = new TextDecoder();
-        let buf = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const lines = buf.split("\n");
-          buf = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const evt = JSON.parse(line);
-              if (evt.type === "total") setPageCount(evt.total);
-              else if (evt.type === "page") setUploadedCount((n) => n + 1);
-              else if (evt.type === "done") pages = evt.pages;
-            } catch { /* ignore */ }
-          }
+      // Always read as a stream regardless of content-type — handles both
+      // NDJSON (streaming PDF) and plain JSON (single image) responses.
+      const reader = uploadRes.body?.getReader();
+      if (!reader) throw new Error("Streaming not supported");
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const evt = JSON.parse(line);
+            if (evt.type === "total") setPageCount(evt.total);
+            else if (evt.type === "page") setUploadedCount((n) => n + 1);
+            else if (evt.type === "done") pages = evt.pages;
+            else if (Array.isArray(evt.pages)) pages = evt.pages; // plain JSON {"pages":[...]}
+          } catch { /* ignore malformed lines */ }
         }
-      } else {
-        const data = await uploadRes.json();
-        pages = data.pages;
+      }
+      // Flush remaining buffer (plain JSON response may land in one chunk with no trailing newline)
+      if (buf.trim()) {
+        try {
+          const evt = JSON.parse(buf);
+          if (evt.type === "done") pages = evt.pages;
+          else if (Array.isArray(evt.pages)) pages = evt.pages;
+        } catch { /* ignore */ }
       }
       if (!pages.length) throw new Error("No pages returned from upload");
       setPageCount(pages.length);
