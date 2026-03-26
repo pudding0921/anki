@@ -256,9 +256,13 @@ async def _run_batch_occlusion_job(
     user_id: int,
 ) -> None:
     """Background task: processes all pages and writes cards to DB independently of the HTTP request."""
-    sem = _get_semaphore()
-    async with sem:  # cap concurrent AI jobs to prevent OOM
+    if os.environ.get("MODAL_TOKEN_ID"):
+        # Modal does all heavy work in isolated containers — Render just coordinates, no memory pressure
         await _run_batch_occlusion_job_inner(job_id, pages, deck_name, user_dir, checklist_text, user_id)
+    else:
+        # Local fallback: semaphore caps RAM usage (each job ~50-100 MB on Render's 512 MB)
+        async with _get_semaphore():
+            await _run_batch_occlusion_job_inner(job_id, pages, deck_name, user_dir, checklist_text, user_id)
 
 
 async def _run_batch_occlusion_job_inner(
