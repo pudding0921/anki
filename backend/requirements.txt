@@ -10,17 +10,11 @@ bcrypt>=4.0.0
 python-multipart==0.0.12
 python-dotenv==1.0.1
 slowapi==0.1.9
-# Phase 2 — AI pipeline
-pytesseract==0.3.13
+# Render coordinator deps (lightweight — heavy AI/PDF libs run inside Modal containers)
 Pillow>=10.4.0
-groq==1.0.0
 requests>=2.32.0
 resend>=2.0.0
 aiofiles==24.1.0
-# Phase 3-5 — SM-2, export, PDF
 genanki==0.13.0
-PyMuPDF==1.26.5
-# Phase 6 — Gemini vision
-google-generativeai>=0.8.0
-# Modal serverless (heavy PDF + AI offload)
+# Modal serverless (coordinator client only — PyMuPDF/groq/google-ai/pytesseract live in Modal image)
 modal==1.4.0

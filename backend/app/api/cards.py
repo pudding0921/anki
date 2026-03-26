@@ -9,6 +9,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+def _count_pdf_pages(data: bytes) -> int:
+    """Count PDF pages from raw bytes without loading PyMuPDF."""
+    import re
+    # PDF page trees: each node has /Count N; root has the total (= max value)
+    counts = re.findall(rb'/Count\s+(\d+)', data)
+    if counts:
+        return max(int(c) for c in counts)
+    # Fallback: count individual page objects
+    return len(re.findall(rb'/Type\s*/Page\b', data))
+
+
 # In-memory job store for background batch-occlusion jobs.
 # Single-instance Render deployment — in-memory is sufficient.
 _batch_jobs: dict = {}  # job_id -> {status, done, total, results, ...}
@@ -157,19 +168,12 @@ async def upload_pages(
         return {"pages": [page]}
 
     # ── PDF: check page cap ───────────────────────────────────────────────────
-    try:
-        import fitz as _fitz_check
-    except ImportError:
-        raise HTTPException(status_code=500, detail="PyMuPDF not installed")
-
     pdf_name = f"{uuid.uuid4()}.pdf"
     pdf_abs = os.path.join(user_dir, pdf_name)
     with open(pdf_abs, "wb") as f:
         f.write(content)
 
-    _doc_check = _fitz_check.open(pdf_abs)
-    page_count = len(_doc_check)
-    _doc_check.close()
+    page_count = _count_pdf_pages(content)
 
     if page_count > MAX_PDF_PAGES:
         raise HTTPException(
@@ -209,7 +213,11 @@ async def upload_pages(
     async def stream_pages():
         sem = _get_semaphore()
         async with sem:
-            import fitz as _fitz
+            try:
+                import fitz as _fitz
+            except ImportError:
+                yield json.dumps({"type": "error", "detail": "PDF rendering unavailable — Modal not configured"}) + "\n"
+                return
             loop = asyncio.get_event_loop()
             pages = []
             yield json.dumps({"type": "total", "total": page_count}) + "\n"
