@@ -102,20 +102,24 @@ export default function OcclusionPage() {
         localStorage.removeItem(PENDING_JOB_KEY);
         setResults({ created: job.created, skipped: job.skipped, results: job.results, deckId: job.deck_id });
 
-        // Load cards for review
+        // Load cards for review — retry up to 3 times in case of transient DB/network hiccup
         if (job.deck_id) {
-          const deckRes = await fetch(`${API_URL}/api/decks/${job.deck_id}`, { headers: authHeader });
-          if (deckRes.ok) {
-            const deck = await deckRes.json();
-            const cards: ReviewCard[] = (deck.cards ?? []).filter(
-              (c: ReviewCard & { card_type: string }) => c.card_type === "occlusion"
-            );
-            if (cards.length > 0) {
-              setReviewCards(cards);
-              setSavedCardIds(new Set());
-              setStep("reviewing");
-              return;
-            }
+          for (let attempt = 0; attempt < 3; attempt++) {
+            if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+            try {
+              const deckRes = await fetch(`${API_URL}/api/decks/${job.deck_id}`, { headers: authHeader });
+              if (!deckRes.ok) continue;
+              const deck = await deckRes.json();
+              const cards: ReviewCard[] = (deck.cards ?? []).filter(
+                (c: ReviewCard & { card_type: string }) => c.card_type === "occlusion"
+              );
+              if (cards.length > 0) {
+                setReviewCards(cards);
+                setSavedCardIds(new Set());
+                setStep("reviewing");
+                return;
+              }
+            } catch { /* retry */ }
           }
         }
         setStep("done");
@@ -500,18 +504,22 @@ export default function OcclusionPage() {
                   onClick={async () => {
                     const token = localStorage.getItem("token");
                     const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-                    const deckRes = await fetch(`${API_URL}/api/decks/${results.deckId}`, { headers: authHeader });
-                    if (deckRes.ok) {
-                      const deck = await deckRes.json();
-                      const cards: ReviewCard[] = (deck.cards ?? []).filter((c: ReviewCard & { card_type: string }) => c.card_type === "occlusion");
-                      if (cards.length > 0) {
-                        setReviewCards(cards);
-                        setSavedCardIds(new Set());
-                        setStep("reviewing");
-                        return;
-                      }
+                    for (let attempt = 0; attempt < 3; attempt++) {
+                      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+                      try {
+                        const deckRes = await fetch(`${API_URL}/api/decks/${results.deckId}`, { headers: authHeader });
+                        if (!deckRes.ok) continue;
+                        const deck = await deckRes.json();
+                        const cards: ReviewCard[] = (deck.cards ?? []).filter((c: ReviewCard & { card_type: string }) => c.card_type === "occlusion");
+                        if (cards.length > 0) {
+                          setReviewCards(cards);
+                          setSavedCardIds(new Set());
+                          setStep("reviewing");
+                          return;
+                        }
+                      } catch { /* retry */ }
                     }
-                    alert("Could not load cards for review. Go to Dashboard → edit the deck instead.");
+                    setError("Could not load cards for review — please go to Dashboard and edit the deck instead.");
                   }}
                 >
                   Review &amp; edit zones
