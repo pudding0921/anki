@@ -256,7 +256,6 @@ async def _run_batch_occlusion_job(
     user_id: int,
 ) -> None:
     """Background task: processes all pages and writes cards to DB independently of the HTTP request."""
-    from app.database import SessionLocal
     sem = _get_semaphore()
     async with sem:  # cap concurrent AI jobs to prevent OOM
         await _run_batch_occlusion_job_inner(job_id, pages, deck_name, user_dir, checklist_text, user_id)
@@ -345,7 +344,12 @@ async def _run_batch_occlusion_job_inner(
                 loop = asyncio.get_event_loop()
 
                 def _run_starmap():
-                    return list(_modal_analyze.starmap(inputs))
+                    # Iterate generator so done count updates as each page finishes
+                    out = []
+                    for pr in _modal_analyze.starmap(inputs):
+                        out.append(pr)
+                        _batch_jobs[job_id]["done"] = len(out)
+                    return out
 
                 all_results = await loop.run_in_executor(None, _run_starmap)
                 for pr in all_results:

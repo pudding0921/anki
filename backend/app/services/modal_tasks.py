@@ -36,10 +36,10 @@ _image = (
         "python-dotenv==1.0.1",
     )
     # Copy the entire app source so containers can import from app.*
-    .copy_local_dir("app", "/app")
+    .add_local_dir("app", remote_path="/app")
 )
 
-_app = modal.App("flowcard", image=_image)
+app = modal.App("flowcard", image=_image)
 
 # Modal secret — set via `modal secret create flowcard-secrets KEY=val ...`
 # Required keys: SUPABASE_URL, SUPABASE_SERVICE_KEY, GROQ_API_KEY
@@ -49,7 +49,7 @@ _secret = modal.Secret.from_name("flowcard-secrets")
 
 # ── render_pdf_pages ──────────────────────────────────────────────────────────
 
-@_app.function(secrets=[_secret], timeout=600, memory=2048)
+@app.function(secrets=[_secret], timeout=600, memory=2048)
 def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
     """
     Render every page of a PDF at 2× scale and upload each image to Supabase.
@@ -101,7 +101,7 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
 
 # ── analyze_page ──────────────────────────────────────────────────────────────
 
-@_app.function(secrets=[_secret], timeout=120, memory=1024)
+@app.function(secrets=[_secret], timeout=120, memory=1024)
 def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
     """
     Run AI occlusion analysis on one rendered slide.
