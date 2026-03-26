@@ -53,18 +53,22 @@ _secret = modal.Secret.from_name("flowcard-secrets")
 def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
     """
     Render every page of a PDF at 2x scale, upload each image to Supabase,
-    and pre-extract text zones using PDF text positions (fast, CPU-only).
+    and pre-extract text zones using PDF text positions + LLM.
 
-    Uploads run in parallel via a thread pool — one thread per page plus one
-    for the source PDF — so total upload time is O(1) instead of O(n).
-    Rendering is CPU-bound and runs sequentially; each page's upload is
-    submitted immediately after rendering so uploads overlap with rendering.
+    All Supabase uploads AND all Groq LLM zone-extraction calls run in parallel
+    via a shared thread pool — so for an N-page PDF the bottleneck is
+    max(render_time, slowest_upload, slowest_LLM_call) instead of
+    N × LLM_call_time (the previous sequential approach).
+
+    Key insight: text data is extracted from each page while still in the main
+    rendering loop (CPU-only, <1ms), then the LLM call is submitted to the pool
+    so it runs concurrently with the next page renders and all uploads.
     """
     sys.path.insert(0, "/")
     import fitz
     from concurrent.futures import ThreadPoolExecutor
     from app.services.storage import upload_file as _upload
-    from app.services.ai_occlusion import zones_for_pdf_page as _zones_fn
+    from app.services.ai_occlusion import _extract_page_text_data, _zones_from_text_data
 
     RENDER_SCALE = 2
 
@@ -73,39 +77,58 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
         pdf_path = tmp.name
 
     doc = fitz.open(pdf_path)
-    # Cap workers: PDF upload + up to 12 page uploads at once
-    max_workers = min(len(doc) + 1, 13)
+    n_pages = len(doc)
+    # Workers: 1 PDF upload + n page uploads + n LLM calls (all I/O-bound).
+    # Capped at 25 to stay within Modal container memory limits.
+    max_workers = min(n_pages * 2 + 1, 25)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        # Start the source-PDF upload immediately in the background
+        # Start the source-PDF upload immediately in the background.
         pdf_key = f"{user_id}/{uuid.uuid4()}.pdf"
         pdf_future = pool.submit(_upload, pdf_bytes, pdf_key, "application/pdf")
 
-        # Render each page, submit its upload immediately, release the bytes
         page_meta = []
         for i, page in enumerate(doc):
+            # ── Render (CPU-bound, sequential) ─────────────────────────────
             pix = page.get_pixmap(matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE))
             img_bytes = pix.tobytes("png")
             w, h = pix.width, pix.height
             pix = None
 
+            # ── Submit upload immediately (I/O-bound, runs in pool) ────────
             img_key = f"{user_id}/{uuid.uuid4()}.png"
             upload_future = pool.submit(_upload, img_bytes, img_key, "image/png")
-            img_bytes = None  # release — pool holds the only remaining ref
+            img_bytes = None  # pool holds the only remaining ref
 
+            # ── Extract text data while holding the page (CPU-only, ~1ms) ──
+            # Then submit the LLM call to the pool so it runs in parallel
+            # with the next page renders and all ongoing uploads.
             try:
-                pre_zones = _zones_fn(page, scale=RENDER_SCALE)
+                words, title_str, title_word_set, title_max_y, body_text, blocks = (
+                    _extract_page_text_data(page)
+                )
+                zones_future = pool.submit(
+                    _zones_from_text_data,
+                    words, title_str, title_word_set, title_max_y, body_text, blocks,
+                    RENDER_SCALE, None,
+                )
             except Exception as e:
-                logger.warning(f"Zone pre-extraction failed p{i+1}: {e}")
-                pre_zones = None
+                logger.warning(f"Text extraction failed p{i+1}: {e}")
+                zones_future = None
 
-            page_meta.append((i, upload_future, w, h, pre_zones))
+            page_meta.append((i, upload_future, w, h, zones_future))
 
+        # ── Collect results (futures resolve as work completes) ────────────
         source_pdf_url = pdf_future.result() or ""
-        # Collect upload URLs in submission order (futures resolve as uploads finish)
         pages = []
-        for i, upload_future, w, h, pre_zones in page_meta:
+        for i, upload_future, w, h, zones_future in page_meta:
             img_url = upload_future.result()
+            pre_zones = None
+            if zones_future is not None:
+                try:
+                    pre_zones = zones_future.result()
+                except Exception as e:
+                    logger.warning(f"Zone extraction failed p{i+1}: {e}")
             pages.append({
                 "image_path": img_url,
                 "width": w,
@@ -118,7 +141,6 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
 
     doc.close()
     os.unlink(pdf_path)
-
     return pages
 
 

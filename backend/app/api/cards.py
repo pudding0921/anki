@@ -359,6 +359,39 @@ async def _run_batch_occlusion_job_inner(
             return {"page": page_num, "image_path": image_path, "img_w": img_w,
                     "img_h": img_h, "zones": zones, "diagram_specs": diagram_specs}
 
+        # ── Helper: write one page result to DB (used by the Modal path below) ──
+        def _write_page(db_session, p_num, img_path, iw, ih, zones, diag_specs):
+            nonlocal created, skipped
+            page_result: dict = {"page": p_num, "status": "skipped", "zones": 0, "diagrams": 0}
+            if zones:
+                card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
+                            image_path=img_path, image_width=iw, image_height=ih)
+                db_session.add(card)
+                db_session.flush()
+                for z in zones:
+                    db_session.add(OcclusionZone(card_id=card.id, label=z["label"],
+                                                 x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
+                created += 1
+                page_result["status"] = "created"
+                page_result["zones"] = len(zones)
+            else:
+                skipped += 1
+                page_result["reason"] = "no text zones found"
+            for spec in diag_specs:
+                diag_card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
+                                 image_path=spec["image_path"],
+                                 image_width=spec["width"], image_height=spec["height"])
+                db_session.add(diag_card)
+                db_session.flush()
+                for z in spec["zones"]:
+                    db_session.add(OcclusionZone(card_id=diag_card.id, label=z["label"],
+                                                 x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
+                created += 1
+                page_result["diagrams"] = page_result.get("diagrams", 0) + 1
+                if page_result["status"] == "skipped":
+                    page_result["status"] = "created"
+            return page_result
+
         # ── Modal path ────────────────────────────────────────────────────────
         if os.environ.get("MODAL_TOKEN_ID"):
             try:
@@ -375,39 +408,6 @@ async def _run_batch_occlusion_job_inner(
                 else:
                     pages_direct = [p for p in pages_with_uid if p.get("pre_zones")]
                     pages_for_vision = [p for p in pages_with_uid if not p.get("pre_zones")]
-
-                # ── Helper: write one page result to DB (needs active db session + deck_id) ──
-        def _write_page(db_session, p_num, img_path, iw, ih, zones, diag_specs):
-                    nonlocal created, skipped
-                    page_result: dict = {"page": p_num, "status": "skipped", "zones": 0, "diagrams": 0}
-                    if zones:
-                        card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
-                                    image_path=img_path, image_width=iw, image_height=ih)
-                        db_session.add(card)
-                        db_session.flush()
-                        for z in zones:
-                            db_session.add(OcclusionZone(card_id=card.id, label=z["label"],
-                                                 x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
-                        created += 1
-                        page_result["status"] = "created"
-                        page_result["zones"] = len(zones)
-                    else:
-                        skipped += 1
-                        page_result["reason"] = "no text zones found"
-                    for spec in diag_specs:
-                        diag_card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
-                                         image_path=spec["image_path"],
-                                         image_width=spec["width"], image_height=spec["height"])
-                        db_session.add(diag_card)
-                        db_session.flush()
-                        for z in spec["zones"]:
-                            db_session.add(OcclusionZone(card_id=diag_card.id, label=z["label"],
-                                                 x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
-                        created += 1
-                        page_result["diagrams"] = page_result.get("diagrams", 0) + 1
-                        if page_result["status"] == "skipped":
-                            page_result["status"] = "created"
-                    return page_result
 
                 # Only call analyze_page for image slides or checklist re-extraction
                 if pages_for_vision:

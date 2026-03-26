@@ -24,7 +24,7 @@ def upload_file(file_bytes: bytes, storage_path: str, content_type: str = "image
             data=file_bytes,
             timeout=30,
         )
-        if response.status_code in (200, 201):
+        if response.status_code in (200, 201, 204):
             return f"{settings.SUPABASE_URL}/storage/v1/object/public/{bucket}/{storage_path}"
         logger.warning("Supabase upload failed (%s): %s", response.status_code, response.text[:200])
         return None

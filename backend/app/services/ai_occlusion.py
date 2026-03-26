@@ -304,6 +304,25 @@ def _extract_title_info(page) -> tuple:
     return title_str, title_word_set, title_max_y
 
 
+def _extract_page_text_data(page) -> tuple:
+    """Extract all text data from a PyMuPDF page as plain Python objects.
+    Must be called while the page/doc is held by the current thread.
+    Returns: (words, title_str, title_word_set, title_max_y, body_text, blocks)
+    """
+    try:
+        words = page.get_text("words")
+    except Exception:
+        words = []
+    try:
+        blocks = page.get_text("dict")["blocks"]
+    except Exception:
+        blocks = []
+    title_str, title_word_set, title_max_y = _extract_title_info(page)
+    body_words = [w for w in words if w[1] >= title_max_y - 2]
+    body_text = " ".join(w[4] for w in body_words if w[4].strip())
+    return words, title_str, title_word_set, title_max_y, body_text, blocks
+
+
 _FILLER_WORDS = {
     "is", "are", "was", "were", "be", "been", "being",
     "the", "a", "an", "of", "in", "by", "via", "with", "from",
@@ -670,56 +689,98 @@ def _formatting_fallback(
     return deduped[:6]
 
 
-def zones_for_pdf_page(
-    page, scale: float = 2.0, checklist_text: Optional[str] = None
+def _formatting_fallback_from_blocks(
+    blocks: list, scale: float = 2.0, title_max_y: float = 0.0
 ) -> List[Dict]:
-    """
-    Generate occlusion zones for one PyMuPDF page object.
-    1. Extract title explicitly — excluded from all zone candidates
-    2. Ask LLM to pick key terms from the body text only
-    3. Match terms to word bounding boxes, skipping title area
-    4. Post-filter: remove any zone whose label words are all title words
-    5. Fallback to formatting heuristics if LLM returns nothing
-    """
-    words = page.get_text("words")  # (x0, y0, x1, y1, word, block, line, word_no)
+    """Same as _formatting_fallback but uses pre-extracted blocks — thread-safe."""
+    sizes = []
+    for block in blocks:
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                if span["text"].strip():
+                    sizes.append(span["size"])
+    if not sizes:
+        return []
+    sizes.sort()
+    median_size = sizes[len(sizes) // 2]
+    max_size = sizes[-1]
+    zones = []
+    for block in blocks:
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = span["text"].strip()
+                if not text or len(text) < 4:
+                    continue
+                bbox = span["bbox"]
+                if bbox[1] < title_max_y + 2:
+                    continue
+                size = span["size"]
+                flags = span.get("flags", 0)
+                if size >= max_size * 0.95:
+                    continue
+                is_bold = bool(flags & (1 << 4))
+                is_larger = size > median_size * 1.1
+                is_allcaps = (text.isupper() and len(text) > 3
+                              and text.lower() not in _EXAMPLE_IDENTIFIER_NAMES)
+                if is_bold or is_larger or is_allcaps:
+                    text_words = text.split()
+                    if len(text_words) > 3:
+                        continue
+                    label = text.strip()
+                    if label.lower() in _FILLER_WORDS:
+                        continue
+                    if (label.isupper() and label.isalpha()
+                            and label.lower() in _EXAMPLE_IDENTIFIER_NAMES):
+                        continue
+                    zones.append({
+                        "label": label,
+                        "x": round(bbox[0] * scale, 1),
+                        "y": round(bbox[1] * scale, 1),
+                        "width": round((bbox[2] - bbox[0]) * scale, 1),
+                        "height": round((bbox[3] - bbox[1]) * scale, 1),
+                    })
+    seen: set = set()
+    deduped = []
+    for z in zones:
+        if z["label"] not in seen:
+            seen.add(z["label"])
+            deduped.append(z)
+    return deduped[:6]
 
-    # ── Step 1: Extract title (font-size based — largest text = title) ─────────
-    title_str, title_word_set, title_max_y = _extract_title_info(page)
-    logger.info(f"Slide title detected: {repr(title_str)} | title_max_y={title_max_y:.1f}")
 
-    # Body text = everything below the title line
-    body_words = [w for w in words if w[1] >= title_max_y - 2]
-    body_text = " ".join(w[4] for w in body_words if w[4].strip())
-
+def _zones_from_text_data(
+    words: list,
+    title_str: str,
+    title_word_set: set,
+    title_max_y: float,
+    body_text: str,
+    blocks: list,
+    scale: float = 2.0,
+    checklist_text: Optional[str] = None,
+) -> List[Dict]:
+    """Generate occlusion zones from pre-extracted page text data.
+    Thread-safe: no PyMuPDF page objects — all inputs are plain Python objects.
+    Used by render_pdf_pages to parallelize LLM calls across pages."""
     zones: List[Dict] = []
 
-    # ── Step 2 & 3: LLM → match to positions ─────────────────────────────────
     if body_text.strip():
         key_terms = _ask_llm_for_key_terms(body_text, title_str, checklist_text)
-
-        # ── Step 4: hard post-filter — word count, filler, title overlap ──────
         key_terms = _post_filter_terms(key_terms, title_word_set, title_str)
-
         if key_terms:
             zones = _match_terms_to_pdf_words(words, key_terms, scale, title_max_y)
 
-    # ── Step 5: formatting fallback ───────────────────────────────────────────
     if not zones:
         logger.info("LLM gave no zones — using formatting fallback")
-        zones = _formatting_fallback(page, scale, title_max_y)
+        zones = _formatting_fallback_from_blocks(blocks, scale, title_max_y)
 
-    # ── Step 6: last resort — any non-trivial word in the body ────────────────
-    # Ensures slides with ANY readable content are never completely skipped.
-    # Picks the first 3 unique non-filler words from the body as zone candidates.
-    if not zones and body_words:
+    if not zones and words:
+        body_words = [w for w in words if w[1] >= title_max_y - 2]
         seen_labels: set = set()
         for w in body_words:
             text = w[4].strip(".,;:!?()\"'[]{}|")
             norm = text.lower()
-            if (len(text) >= 3
-                    and norm not in _FILLER_WORDS
-                    and not norm.isnumeric()
-                    and norm not in seen_labels):
+            if (len(text) >= 3 and norm not in _FILLER_WORDS
+                    and not norm.isnumeric() and norm not in seen_labels):
                 seen_labels.add(norm)
                 zones.append({
                     "label": text,
@@ -734,6 +795,20 @@ def zones_for_pdf_page(
             logger.info(f"Last-resort: created {len(zones)} zone(s) from raw body words")
 
     return zones
+
+
+def zones_for_pdf_page(
+    page, scale: float = 2.0, checklist_text: Optional[str] = None
+) -> List[Dict]:
+    """Generate occlusion zones for one PyMuPDF page object.
+    Extracts all text data from the page then delegates to _zones_from_text_data."""
+    words, title_str, title_word_set, title_max_y, body_text, blocks = (
+        _extract_page_text_data(page)
+    )
+    logger.info(f"Slide title detected: {repr(title_str)} | title_max_y={title_max_y:.1f}")
+    return _zones_from_text_data(
+        words, title_str, title_word_set, title_max_y, body_text, blocks, scale, checklist_text
+    )
 
 
 # ── Vision model (shared by images and diagrams) ─────────────────────────────
