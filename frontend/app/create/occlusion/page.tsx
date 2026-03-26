@@ -83,7 +83,7 @@ export default function OcclusionPage() {
 
   async function pollJob(jobId: string, authHeader: Record<string, string>) {
     while (true) {
-      await new Promise((r) => setTimeout(r, 3000));
+      await new Promise((r) => setTimeout(r, 1500));
       const statusRes = await fetch(`${API_URL}/api/cards/batch-occlusion/status/${jobId}`, { headers: authHeader });
       if (!statusRes.ok) {
         if (statusRes.status === 404) throw new Error("Job expired — please re-upload your slides.");

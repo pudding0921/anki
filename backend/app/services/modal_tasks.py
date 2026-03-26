@@ -55,56 +55,66 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
     Render every page of a PDF at 2x scale, upload each image to Supabase,
     and pre-extract text zones using PDF text positions (fast, CPU-only).
 
-    Pre-extracting zones here means analyze_page only needs to run for slides
-    with no extractable text (pure image slides), typically 10-20% of a deck.
-    Returns a list of page info dicts with pre_zones set.
+    Uploads run in parallel via a thread pool — one thread per page plus one
+    for the source PDF — so total upload time is O(1) instead of O(n).
+    Rendering is CPU-bound and runs sequentially; each page's upload is
+    submitted immediately after rendering so uploads overlap with rendering.
     """
     sys.path.insert(0, "/")
     import fitz
+    from concurrent.futures import ThreadPoolExecutor
     from app.services.storage import upload_file as _upload
     from app.services.ai_occlusion import zones_for_pdf_page as _zones_fn
 
     RENDER_SCALE = 2
-
-    # Upload the original PDF so analyze_page can use it as fallback
-    pdf_key = f"{user_id}/{uuid.uuid4()}.pdf"
-    source_pdf_url = _upload(pdf_bytes, pdf_key, "application/pdf") or ""
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(pdf_bytes)
         pdf_path = tmp.name
 
     doc = fitz.open(pdf_path)
-    pages = []
+    # Cap workers: PDF upload + up to 12 page uploads at once
+    max_workers = min(len(doc) + 1, 13)
 
-    for i, page in enumerate(doc):
-        # Render page image
-        pix = page.get_pixmap(matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE))
-        img_bytes = pix.tobytes("png")
-        w, h = pix.width, pix.height
-        pix = None  # free before upload
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        # Start the source-PDF upload immediately in the background
+        pdf_key = f"{user_id}/{uuid.uuid4()}.pdf"
+        pdf_future = pool.submit(_upload, pdf_bytes, pdf_key, "application/pdf")
 
-        img_key = f"{user_id}/{uuid.uuid4()}.png"
-        img_url = _upload(img_bytes, img_key, "image/png")
-        img_bytes = None  # free after upload
+        # Render each page, submit its upload immediately, release the bytes
+        page_meta = []
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE))
+            img_bytes = pix.tobytes("png")
+            w, h = pix.width, pix.height
+            pix = None
 
-        # Pre-extract text zones (pure CPU, no API calls — fast)
-        # None means extraction failed; [] means no text found (image slide)
-        try:
-            pre_zones = _zones_fn(page, scale=RENDER_SCALE)
-        except Exception as e:
-            logger.warning(f"Zone pre-extraction failed p{i+1}: {e}")
-            pre_zones = None
+            img_key = f"{user_id}/{uuid.uuid4()}.png"
+            upload_future = pool.submit(_upload, img_bytes, img_key, "image/png")
+            img_bytes = None  # release — pool holds the only remaining ref
 
-        pages.append({
-            "image_path": img_url,
-            "width": w,
-            "height": h,
-            "page": i + 1,
-            "source_pdf": source_pdf_url,
-            "render_scale": RENDER_SCALE,
-            "pre_zones": pre_zones,  # list (possibly empty) or None if extraction failed
-        })
+            try:
+                pre_zones = _zones_fn(page, scale=RENDER_SCALE)
+            except Exception as e:
+                logger.warning(f"Zone pre-extraction failed p{i+1}: {e}")
+                pre_zones = None
+
+            page_meta.append((i, upload_future, w, h, pre_zones))
+
+        source_pdf_url = pdf_future.result() or ""
+        # Collect upload URLs in submission order (futures resolve as uploads finish)
+        pages = []
+        for i, upload_future, w, h, pre_zones in page_meta:
+            img_url = upload_future.result()
+            pages.append({
+                "image_path": img_url,
+                "width": w,
+                "height": h,
+                "page": i + 1,
+                "source_pdf": source_pdf_url,
+                "render_scale": RENDER_SCALE,
+                "pre_zones": pre_zones,
+            })
 
     doc.close()
     os.unlink(pdf_path)
