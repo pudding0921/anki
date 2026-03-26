@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -82,9 +83,14 @@ def register(request: Request, payload: UserRegister, db: Session = Depends(get_
 
 @router.post("/login", response_model=Token)
 @limiter.limit("10/minute")
-def login(request: Request, payload: UserLogin, db: Session = Depends(get_db)):
+async def login(request: Request, payload: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
-    if not user or not verify_password(payload.password, user.hashed_password):
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    # Run bcrypt in a thread so it doesn't block the event loop
+    loop = asyncio.get_running_loop()
+    valid = await loop.run_in_executor(None, verify_password, payload.password, user.hashed_password)
+    if not valid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     token = create_access_token(subject=user.email)
     return {"access_token": token, "token_type": "bearer"}
