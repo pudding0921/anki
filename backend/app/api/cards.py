@@ -270,6 +270,11 @@ async def _run_batch_occlusion_job_inner(
     checklist_text: Optional[str], user_id: int,
 ) -> None:
     from app.database import SessionLocal
+
+    # ── Step 1: get/create deck — short-lived session, released immediately.
+    # We cannot hold a DB connection open across the long Modal processing wait
+    # (5-10 min) because Supabase's pooler drops idle connections after ~5 min,
+    # causing psycopg2.OperationalError when we finally try to INSERT cards.
     db = SessionLocal()
     try:
         deck = db.query(Deck).filter(Deck.name == deck_name, Deck.user_id == user_id).first()
@@ -278,10 +283,18 @@ async def _run_batch_occlusion_job_inner(
             db.add(deck)
             db.commit()
             db.refresh(deck)
+        deck_id = deck.id
+    finally:
+        db.close()  # release BEFORE the long AI processing wait
 
-        created = 0
-        skipped = 0
-        results: list = []
+    created = 0
+    skipped = 0
+    results: list = []
+
+    # Placeholder so the rest of the function can reference db; it will be
+    # reassigned to a fresh session before any writes happen.
+    db = None
+    try:
 
         def _process_page_sync(page: dict) -> dict:
             import requests as _requests
@@ -355,16 +368,17 @@ async def _run_batch_occlusion_job_inner(
                     pages_direct = [p for p in pages_with_uid if p.get("pre_zones")]
                     pages_for_vision = [p for p in pages_with_uid if not p.get("pre_zones")]
 
-                def _write_page(p_num, img_path, iw, ih, zones, diag_specs):
+                # ── Helper: write one page result to DB (needs active db session + deck_id) ──
+        def _write_page(db_session, p_num, img_path, iw, ih, zones, diag_specs):
                     nonlocal created, skipped
                     page_result: dict = {"page": p_num, "status": "skipped", "zones": 0, "diagrams": 0}
                     if zones:
-                        card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
+                        card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
                                     image_path=img_path, image_width=iw, image_height=ih)
-                        db.add(card)
-                        db.flush()
+                        db_session.add(card)
+                        db_session.flush()
                         for z in zones:
-                            db.add(OcclusionZone(card_id=card.id, label=z["label"],
+                            db_session.add(OcclusionZone(card_id=card.id, label=z["label"],
                                                  x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
                         created += 1
                         page_result["status"] = "created"
@@ -373,26 +387,19 @@ async def _run_batch_occlusion_job_inner(
                         skipped += 1
                         page_result["reason"] = "no text zones found"
                     for spec in diag_specs:
-                        diag_card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
+                        diag_card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
                                          image_path=spec["image_path"],
                                          image_width=spec["width"], image_height=spec["height"])
-                        db.add(diag_card)
-                        db.flush()
+                        db_session.add(diag_card)
+                        db_session.flush()
                         for z in spec["zones"]:
-                            db.add(OcclusionZone(card_id=diag_card.id, label=z["label"],
+                            db_session.add(OcclusionZone(card_id=diag_card.id, label=z["label"],
                                                  x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
                         created += 1
                         page_result["diagrams"] = page_result.get("diagrams", 0) + 1
                         if page_result["status"] == "skipped":
                             page_result["status"] = "created"
                     return page_result
-
-                # Write pre-analyzed pages directly (no Modal call)
-                for p in pages_direct:
-                    pr = _write_page(p["page"], p["image_path"], int(p["width"]), int(p["height"]),
-                                     p["pre_zones"], [])
-                    results.append(pr)
-                    _batch_jobs[job_id]["done"] = len(results)
 
                 # Only call analyze_page for image slides or checklist re-extraction
                 if pages_for_vision:
@@ -406,19 +413,37 @@ async def _run_batch_occlusion_job_inner(
                             _batch_jobs[job_id]["done"] = len(results) + len(out)
                         return out
 
-                    all_results = await loop.run_in_executor(None, _run_starmap)
-                    for pr in all_results:
+                    vision_results = await loop.run_in_executor(None, _run_starmap)
+                else:
+                    vision_results = []
+
+                # ── Open a FRESH session now that all AI work is done ─────────
+                db = SessionLocal()
+                try:
+                    # Write pre-analyzed pages directly
+                    for p in pages_direct:
+                        pr = _write_page(db, p["page"], p["image_path"], int(p["width"]), int(p["height"]),
+                                         p["pre_zones"], [])
+                        results.append(pr)
+                        _batch_jobs[job_id]["done"] = len(results)
+
+                    # Write vision-model results
+                    for pr in vision_results:
                         page_result = _write_page(
-                            pr["page"], pr["image_path"], pr["img_w"], pr["img_h"],
+                            db, pr["page"], pr["image_path"], pr["img_w"], pr["img_h"],
                             pr["zones"], pr["diagram_specs"],
                         )
                         results.append(page_result)
                         _batch_jobs[job_id]["done"] = len(results)
 
-                db.commit()
+                    db.commit()
+                finally:
+                    db.close()
+                    db = None
+
                 _batch_jobs[job_id].update({
                     "status": "done", "created": created, "skipped": skipped,
-                    "deck_id": deck.id, "results": results,
+                    "deck_id": deck_id, "results": results,
                 })
                 logger.info(
                     f"Job {job_id} (Modal): done — {created} created, {skipped} skipped "
@@ -428,12 +453,18 @@ async def _run_batch_occlusion_job_inner(
             except Exception as exc:
                 logger.warning(f"Modal analyze failed for job {job_id}, falling back to local: {exc}")
 
-        # ── Local fallback ────────────────────────────────────────────────────
+        # ── Local fallback — open fresh session, process pages with 3 workers ─
         loop = asyncio.get_event_loop()
+        local_results = []
         with ThreadPoolExecutor(max_workers=min(len(pages), 3)) as executor:
             futures = [loop.run_in_executor(executor, _process_page_sync, p) for p in pages]
             for fut in asyncio.as_completed(futures):
-                pr = await fut
+                local_results.append(await fut)
+                _batch_jobs[job_id]["done"] = len(local_results)
+
+        db = SessionLocal()
+        try:
+            for pr in local_results:
                 page_num = pr["page"]
                 image_path = pr["image_path"]
                 img_w = pr["img_w"]
@@ -444,13 +475,12 @@ async def _run_batch_occlusion_job_inner(
                 if pr.get("status") == "error":
                     skipped += 1
                     results.append({"page": page_num, "status": "error", "reason": pr.get("reason", "")})
-                    _batch_jobs[job_id]["done"] = len(results)
                     continue
 
                 page_result: dict = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
 
                 if zones:
-                    card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
+                    card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
                                 image_path=image_path, image_width=img_w, image_height=img_h)
                     db.add(card)
                     db.flush()
@@ -472,7 +502,7 @@ async def _run_batch_occlusion_job_inner(
                     local_diag_path = f"/uploads/{user_id}/{diag_name}"
                     diag_ct = "image/jpeg" if diag_ext in ("jpg", "jpeg") else "image/png"
                     supabase_diag_url = storage_upload(spec["image_bytes"], f"{user_id}/{diag_name}", diag_ct)
-                    diag_card = Card(deck_id=deck.id, card_type="occlusion", front="", back="",
+                    diag_card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
                                      image_path=supabase_diag_url or local_diag_path,
                                      image_width=spec["width"], image_height=spec["height"])
                     db.add(diag_card)
@@ -486,23 +516,24 @@ async def _run_batch_occlusion_job_inner(
                         page_result["status"] = "created"
 
                 results.append(page_result)
-                _batch_jobs[job_id]["done"] = len(results)
 
-        db.commit()
-        _batch_jobs[job_id].update({
-            "status": "done",
-            "created": created,
-            "skipped": skipped,
-            "deck_id": deck.id,
-            "results": results,
-        })
-        logger.info(f"Job {job_id}: done — {created} created, {skipped} skipped")
+            db.commit()
+            _batch_jobs[job_id].update({
+                "status": "done", "created": created, "skipped": skipped,
+                "deck_id": deck_id, "results": results,
+            })
+            logger.info(f"Job {job_id}: done — {created} created, {skipped} skipped")
+        finally:
+            db.close()
+            db = None
+
     except Exception as exc:
         logger.error(f"Job {job_id} failed: {exc}")
         _batch_jobs[job_id]["status"] = "error"
         _batch_jobs[job_id]["error"] = str(exc)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 @router.post("/batch-occlusion")
