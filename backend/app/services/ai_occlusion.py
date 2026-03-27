@@ -16,70 +16,77 @@ logger = logging.getLogger(__name__)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards for university students (biology, chemistry, anatomy, physiology, pharmacology, biochemistry, microbiology, genetics, pathology, computer science, and other subjects). Extract 3–5 keywords or vocabulary terms a student MUST memorise from the slide body text. Return only those terms.
+KEY_TERMS_PROMPT = """Extract 3–5 key terms from this university slide for Anki image-occlusion flashcards.
+A student will study by uncovering hidden words — pick the specific scientific names, values, and vocabulary they must memorise.
 
-NEVER OCCLUDE THE SLIDE TITLE: {title}
+OUTPUT FORMAT: a JSON array of strings, nothing else.
+SLIDE TITLE — never include any of these words: {title}
 
-══════════════════════════════════════════════════════
-  HARD RULES
-══════════════════════════════════════════════════════
-R1. MAXIMUM 4 WORDS per term. 1–2 words ideal; multi-word science phrases up to 4 words allowed.
-R2. NEVER return a full sentence or clause.
-    Do NOT start a term with: "the", "a", "an", "that", "which", "does", "do", "not", "and", "or"
-R3. NEVER return the slide title or any word from it.
-R4. ALWAYS return chemical names, drug names, gene names, enzyme names, structure names, values, and CS keywords.
-R5. Return 3–5 terms — if the slide has real content, find at least 3 terms. Even simple slides have keywords worth covering.
-R6. Greek letters and chemical formulas (CO2, H2O, ATP, ΔG) are valid terms.
-R7. NEVER return copyright notices, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, etc.), "©", page numbers, or footer text.
+RULES (3 only):
+1. Return 3–5 terms. Always find at least 3 if the slide has any educational content.
+2. Each term is 1–4 words — the scientific noun/value/keyword, NOT connecting or explanatory words.
+3. Never include: slide title words, full sentences, pure filler (is/are/the/a/an/that/which), copyright or publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, ©).
 
-══════════════════════════════════════════════════════
-  PATTERN GUIDE
-══════════════════════════════════════════════════════
+WHAT TO EXTRACT — examples by subject:
 
-PATTERN 1 — "Term: definition" (definition slide)
-  Bullet:   "Glycolysis: anaerobic breakdown of glucose to produce ATP and pyruvate"
-  ✓ Return: "Glycolysis", "ATP", "pyruvate"   ← term + key vocabulary from the definition
-  Bullet:   "Abstraction: captures general characteristics without details"
-  ✓ Return: "Abstraction", "general characteristics"
+Pharmacology:
+  "Metformin inhibits hepatic glucose production via AMPK activation"
+  → ["Metformin", "hepatic glucose production", "AMPK"]
+  "Beta-blockers competitively antagonise catecholamines at beta-1 receptors"
+  → ["Beta-blockers", "catecholamines", "beta-1 receptors"]
 
-PATTERN 2 — Drug / molecule + mechanism
-  Bullet:   "Metformin inhibits hepatic glucose production via AMPK activation"
-  ✓ Return: "Metformin", "hepatic glucose production", "AMPK"
+Anatomy / Physiology:
+  "The sinoatrial node sets heart rate at 60–100 bpm; Purkinje fibers conduct impulses"
+  → ["sinoatrial node", "60–100 bpm", "Purkinje fibers"]
+  "Aldosterone acts on the collecting duct to increase Na+ reabsorption"
+  → ["Aldosterone", "collecting duct", "Na+ reabsorption"]
 
-PATTERN 3 — Anatomical structure + function
-  Bullet:   "The sinoatrial node generates electrical impulses at 60–100 bpm"
-  ✓ Return: "sinoatrial node", "60–100 bpm"
+Biochemistry / Pathways:
+  "Pyruvate decarboxylase converts pyruvate to acetyl-CoA in the mitochondrial matrix"
+  → ["Pyruvate decarboxylase", "acetyl-CoA", "mitochondrial matrix"]
+  "NADH donates electrons to Complex I of the electron transport chain"
+  → ["NADH", "Complex I", "electron transport chain"]
 
-PATTERN 4 — Chemical / reaction
-  Bullet:   "Carboxylic acids contain a carboxyl functional group (-COOH)"
-  ✓ Return: "carboxyl", "-COOH"
+Lab values / Clinical:
+  "HbA1c > 6.5% diagnoses type 2 diabetes; normal fasting glucose is 70–100 mg/dL"
+  → ["HbA1c > 6.5%", "type 2 diabetes", "70–100 mg/dL"]
+  "CD4 count < 200 cells/uL defines AIDS; viral load > 100,000 requires treatment"
+  → ["CD4 < 200", "AIDS", "viral load"]
 
-PATTERN 5 — Threshold / lab value
-  Bullet:   "HbA1c > 6.5% confirms a diagnosis of type 2 diabetes"
-  ✓ Return: "HbA1c > 6.5%", "type 2 diabetes"
+Microbiology / Pathology:
+  "Staphylococcus aureus produces protein A, binding the Fc region of IgG to evade immunity"
+  → ["Staphylococcus aureus", "protein A", "IgG Fc"]
+  "Reed-Sternberg cells are the hallmark of Hodgkin lymphoma, derived from B cells"
+  → ["Reed-Sternberg cells", "Hodgkin lymphoma"]
 
-PATTERN 6 — Cell type / tissue / organelle
-  Bullet:   "Chief cells secrete pepsinogen; parietal cells secrete HCl and intrinsic factor"
-  ✓ Return: "Chief cells", "pepsinogen", "parietal cells", "HCl"
+Genetics / Molecular biology:
+  "BRCA1 and BRCA2 are tumour suppressor genes; mutations increase breast/ovarian cancer risk"
+  → ["BRCA1", "BRCA2", "tumour suppressor"]
+  "mRNA is translated 5' to 3' by ribosomes; start codon AUG codes for methionine"
+  → ["5' to 3'", "AUG", "methionine"]
 
-PATTERN 7 — Genetics / molecular biology
-  Bullet:   "BRCA1 and BRCA2 mutations increase risk of breast and ovarian cancer"
-  ✓ Return: "BRCA1", "BRCA2", "breast and ovarian cancer"
+Chemistry:
+  "Carboxylic acids contain a carboxyl group (-COOH); SN2 reactions invert stereochemistry"
+  → ["carboxyl group", "-COOH", "SN2", "stereochemistry"]
 
-PATTERN 8 — Pathway step / enzyme
-  Bullet:   "Pyruvate decarboxylase converts pyruvate to acetyl-CoA in the mitochondria"
-  ✓ Return: "Pyruvate decarboxylase", "acetyl-CoA", "mitochondria"
+Definition slides — "Term: definition or explanation":
+  "Glycolysis: anaerobic breakdown of glucose producing ATP and pyruvate"
+  → ["Glycolysis", "ATP", "pyruvate"]         ← return the TERM plus key science nouns from the definition
+  "Osmosis: net movement of water across a semipermeable membrane down its concentration gradient"
+  → ["Osmosis", "semipermeable membrane", "concentration gradient"]
+  "Apoptosis: programmed cell death triggered by caspase activation"
+  → ["Apoptosis", "caspase activation"]
 
-PATTERN 9 — Programming / CS keyword
-  Code:     "struct Student {{ int studentID; string name; }};"
-  ✓ Return: "struct"   ← the language keyword being taught; NEVER example field names like studentID
-  Bullet:   "enum defines a named set of integer constants"
-  ✓ Return: "enum", "integer constants"
+CS / Programming:
+  "enum defines a named set of integer constants — e.g. enum Day {{ MONDAY, TUESDAY }}"
+  → ["enum", "integer constants"]             ← language keywords only; NEVER example names (MONDAY etc.)
+  "Inheritance allows a subclass to reuse methods and fields from its superclass"
+  → ["Inheritance", "subclass", "superclass"]
 {checklist_section}
-════ SLIDE BODY TEXT (title already removed) ════
+SLIDE TEXT:
 {body_text}
 
-Return ONLY a valid JSON array of short strings. No markdown, no explanation:
+Return ONLY a JSON array — no markdown, no explanation, no extra text:
 ["term1", "term2", "term3"]"""
 
 CHECKLIST_SECTION = "\n━━ Study checklist — prioritize terms related to these topics ━━\n{checklist}\n"
@@ -120,117 +127,76 @@ VISION_PROMPT = (
     'Return ONLY valid JSON, no markdown:\n[{"label":"term","x":0.1,"y":0.2,"w":0.05,"h":0.03}]'
 )
 
-ANKIFLOW_VISION_PROMPT = """You are building Anki image-occlusion flashcards from a study slide image.
-This slide may contain text bullets, anatomical diagrams, medical images, charts, or figures.
+ANKIFLOW_VISION_PROMPT = """You are building Anki image-occlusion flashcards from a university slide image.
+Identify and box 1–10 key terms, values, or diagram labels that a student must memorise.
 
-═══════════════════════════════════════════
-STEP 1 — IDENTIFY THE TITLE (NEVER BOX THIS)
-═══════════════════════════════════════════
-The title is the largest or boldest text at the top. Record it as master_topic.
-Do NOT place any occlusion box on the title or any word in it.
+OUTPUT FORMAT (strict JSON, no markdown):
+{
+  "master_topic": "slide title",
+  "cards": [
+    {"type": "IMAGE_OCCLUSION", "occlusion_label": "term", "bounding_box": [ymin, xmin, ymax, xmax], "context_hint": "brief note"}
+  ]
+}
+Bounding box: [ymin, xmin, ymax, xmax] on a 0–1000 scale. Box TIGHTLY around the term only.
 
-═══════════════════════════════════════════
-STEP 2 — FIND EVERYTHING TO BOX (1–10 items)
-═══════════════════════════════════════════
-Box 1–10 terms. Even 1 zone is valuable. DO NOT return empty cards — find SOMETHING.
+STEP 1 — Find the title (largest/boldest text at top). Set it as master_topic. NEVER box it.
 
-── PRIORITY 1: Diagram and Image Labels (always box these first) ──
-If the slide contains any diagram, figure, anatomical image, chart, or photo:
-  • Box EVERY visible label that names a structure, component, or part
-  • Box ALL text connected to the image by arrows, lines, or callouts
-  • Box text positioned next to or around the image that identifies parts
-  • Box every anatomical structure name (e.g. "aorta", "mitral valve", "hippocampus")
-  • Box every cell/tissue type label (e.g. "hepatocyte", "Purkinje fiber", "goblet cell")
-  • Box every pathological finding name (e.g. "Mallory bodies", "Reed-Sternberg cells")
-  • Box every numbered or lettered label that identifies diagram components
-  CRITICAL: If there is a diagram, you MUST find at least 1 label. Look harder.
+STEP 2 — Box in priority order:
 
-── PRIORITY 2: Medical/Science Key Terms ──
-  • Drug names, drug classes, mechanisms of action
-  • Gene names, protein names, enzyme names, receptor names
-  • Disease names, syndrome names, pathogen names
-  • Numerical thresholds and values (e.g. "HbA1c > 6.5%", "120/80 mmHg", "CD4 < 200")
-  • Pathway names, process names
+PRIORITY 1 — Diagram / image labels (box these first if any diagram is present):
+  • Every label connected to a structure by an arrow or callout line
+  • Every anatomical part name (aorta, mitral valve, hippocampus, Bowman's capsule)
+  • Every cell/tissue type label (hepatocyte, goblet cell, Purkinje fiber)
+  • Every pathological finding (Reed-Sternberg cells, Mallory bodies, Lewy bodies)
+  • Numbered/lettered labels identifying diagram components
+  Example: heart diagram → box "left ventricle", "chordae tendineae", "aortic valve"
+  Example: brain MRI labels → box "hippocampus", "amygdala", "corpus callosum"
 
-── PRIORITY 3: Text Bullet Keywords ──
-  For each bullet point, apply the fill-in-the-blank test:
-  Replace your chosen word with a blank — does a readable question remain?
-    YES → box it.   NO (sentence becomes empty) → pick a shorter term.
-
-EXAMPLES:
-  Heart diagram with arrows → box "left ventricle", "aortic valve", "chordae tendineae"
-  Brain diagram with labels → box "hippocampus", "amygdala", "corpus callosum"
-  Pathology image with caption "Reed-Sternberg cells" → box "Reed-Sternberg cells"
-  Bullet "metformin inhibits hepatic glucose production" → box "metformin"
-  Bullet "HbA1c > 6.5% confirms diabetes" → box "HbA1c > 6.5%"
-  Bullet "photosynthesis occurs in the chloroplast" → box "photosynthesis" AND "chloroplast"
+PRIORITY 2 — Scientific key terms in bullet points:
+  • Drug names, drug classes: "Metformin", "Beta-blockers", "ACE inhibitors"
+  • Enzyme/protein/gene names: "Pyruvate decarboxylase", "BRCA1", "p53"
+  • Disease/pathogen names: "Staphylococcus aureus", "Hodgkin lymphoma", "type 2 diabetes"
+  • Numerical values and thresholds: "HbA1c > 6.5%", "120/80 mmHg", "CD4 < 200"
+  • Biochemical compounds: "acetyl-CoA", "ATP", "NADH", "Na+"
+  Example: "Metformin inhibits hepatic glucose production via AMPK" → box "Metformin", "AMPK"
+  Example: "HbA1c > 6.5% confirms type 2 diabetes" → box "HbA1c > 6.5%", "type 2 diabetes"
+  Example: "photosynthesis occurs in the chloroplast" → box "photosynthesis", "chloroplast"
 
 NEVER box:
-  • The slide title / main heading
-  • Full sentences or clauses (more than 4 words that form a complete thought)
-  • Pure filler: is, are, was, the, a, an, that, which, and, or, but
-  • Code example variable/constant names used as mere illustrations (MONDAY, x, arr, i)
-  • Footer content: copyright notices, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, Springer, etc.), "©", "All rights reserved", page numbers, footnotes, watermarks, or any attribution text at the slide bottom
-
-═══════════════════════════════════════════
-STEP 3 — OUTPUT (strict JSON, no markdown)
-═══════════════════════════════════════════
-Bounding box: [ymin, xmin, ymax, xmax] on 0–1000 scale.
-Box must be TIGHT around the keyword/label only.
-
-{
-  "master_topic": "slide title here",
-  "cards": [
-    {
-      "type": "IMAGE_OCCLUSION",
-      "occlusion_label": "exact term or label",
-      "bounding_box": [ymin, xmin, ymax, xmax],
-      "context_hint": "what this labels or means"
-    }
-  ]
-}"""
+  • The slide title or any word in it
+  • Full sentences (more than 4 words forming a complete thought)
+  • Pure filler words: is, are, was, the, a, an, and, or, but, that, which
+  • Copyright, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, ©), page numbers, footnotes"""
 
 
-DIAGRAM_VISION_PROMPT = """You are analyzing a medical or scientific diagram, figure, or image to build Anki image-occlusion flashcards.
+DIAGRAM_VISION_PROMPT = """Analyse this image and build Anki image-occlusion flashcards from it.
 
-FIRST — identify what type of image this is:
-  • If it is a CODE BLOCK, CODE DIAGRAM, or PSEUDOCODE → return {"master_topic": "code", "cards": []}
-    Code examples are not diagrams. Variable names, field names, and example identifiers are never worth memorising.
-  • If it is a BOOK COVER, LOGO, DECORATIVE IMAGE, or BACKGROUND → return {"master_topic": "decorative", "cards": []}
+FIRST — classify the image type:
+  • Code block, pseudocode, or code diagram → return {"master_topic": "code", "cards": []}
+  • Book cover, logo, decorative image, or plain background → return {"master_topic": "decorative", "cards": []}
+  • Anything else (anatomy diagram, cell diagram, chart, pathology image, etc.) → proceed below.
 
-Otherwise, find text labels that identify structures in the diagram:
-
-WHAT TO BOX:
-  1. Labels naming anatomical structures (e.g. "aorta", "left atrium", "Bowman's capsule")
-  2. Text at the end of arrows or callout lines pointing to parts of the diagram
-  3. Layer names, region names, zone names
-  4. Cell types, tissue types, organelle names
-  5. Pathological finding names or disease feature labels
-  6. Drug target names, receptor labels, enzyme names
+FOR SCIENTIFIC/MEDICAL DIAGRAMS — box text labels identifying structures (max 5 boxes):
+  1. Anatomical structure names: "aorta", "left atrium", "Bowman's capsule", "Bundle of His"
+  2. Text at arrows or callout lines pointing to diagram parts
+  3. Cell types, tissue types, organelle names: "mitochondria", "goblet cell", "hepatocyte"
+  4. Pathological findings: "Reed-Sternberg cell", "Lewy body", "Ghon focus"
+  5. Receptor/enzyme/drug target labels: "beta-1 receptor", "ACE", "Na+/K+ ATPase"
+  6. Layer, region, or zone names in cross-section diagrams
 
 NEVER BOX:
-  • Variable names, field names, or identifiers in code (studentID, name, gpa, workDay)
-  • Data type keywords used as mere examples (int, string, double, float)
-  • Book covers, publisher logos, decorative artwork
   • The diagram title or heading
-
-IMPORTANT:
-  • Maximum 5 boxes per diagram
-  • Each box covers 1–4 words maximum — box tightly around the label only
+  • Variable/field names in code (studentID, workDay, name, gpa)
+  • Publisher logos, decorative elements, backgrounds
 
 OUTPUT — strict JSON only, no markdown:
 {
   "master_topic": "what this diagram shows",
   "cards": [
-    {
-      "type": "IMAGE_OCCLUSION",
-      "occlusion_label": "label text here",
-      "bounding_box": [ymin, xmin, ymax, xmax],
-      "context_hint": "what structure this labels"
-    }
+    {"type": "IMAGE_OCCLUSION", "occlusion_label": "label text", "bounding_box": [ymin, xmin, ymax, xmax], "context_hint": "what it labels"}
   ]
 }
-Bounding box: [ymin, xmin, ymax, xmax] on 0–1000 scale. Box tight around the text label."""
+Bounding box: [ymin, xmin, ymax, xmax] on 0–1000 scale. Box tightly around each text label."""
 
 
 # ── Title extraction ──────────────────────────────────────────────────────────
