@@ -48,10 +48,15 @@ MAX_PDF_PAGES = 200  # soft cap — semaphore protects memory, this just prevent
 
 
 def _get_modal_fn(name: str):
-    """Look up a deployed Modal function by name, caching the handle."""
+    """Return a handle to a deployed Modal function, cached after first creation.
+
+    Uses modal.Function.from_name() (Modal 1.x API) which is lazy — the handle
+    is created without any network call and auto-hydrates when .remote() is first
+    called. Caching avoids constructing a new handle object on every request.
+    """
     if name not in _MODAL_FN_CACHE:
         import modal
-        _MODAL_FN_CACHE[name] = modal.Function.lookup("flowcard", name)
+        _MODAL_FN_CACHE[name] = modal.Function.from_name("flowcard", name)
     return _MODAL_FN_CACHE[name]
 
 logger = logging.getLogger(__name__)
