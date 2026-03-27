@@ -438,22 +438,18 @@ async def _run_batch_occlusion_job_inner(
 
         # ── Helper: write one page result to DB (used by the Modal path below) ──
         def _write_page(db_session, p_num, img_path, iw, ih, zones, diag_specs):
-            nonlocal created, skipped
-            page_result: dict = {"page": p_num, "status": "skipped", "zones": 0, "diagrams": 0}
-            if zones:
-                card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
-                            image_path=img_path, image_width=iw, image_height=ih)
-                db_session.add(card)
-                db_session.flush()
-                for z in zones:
-                    db_session.add(OcclusionZone(card_id=card.id, label=z["label"],
-                                                 x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
-                created += 1
-                page_result["status"] = "created"
-                page_result["zones"] = len(zones)
-            else:
-                skipped += 1
-                page_result["reason"] = "no text zones found"
+            nonlocal created
+            # Always create a card for every slide — students must not miss any content.
+            # Slides with 0 zones are still created so the full slide is reviewable.
+            card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
+                        image_path=img_path, image_width=iw, image_height=ih)
+            db_session.add(card)
+            db_session.flush()
+            for z in (zones or []):
+                db_session.add(OcclusionZone(card_id=card.id, label=z["label"],
+                                             x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
+            created += 1
+            page_result: dict = {"page": p_num, "status": "created", "zones": len(zones or []), "diagrams": 0}
             for spec in diag_specs:
                 # Only create a diagram card if the vision model found zones to study
                 if not spec.get("zones"):
@@ -596,22 +592,16 @@ async def _run_batch_occlusion_job_inner(
                     results.append({"page": page_num, "status": "error", "reason": pr.get("reason", "")})
                     continue
 
-                page_result: dict = {"page": page_num, "status": "skipped", "zones": 0, "diagrams": 0}
-
-                if zones:
-                    card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
-                                image_path=image_path, image_width=img_w, image_height=img_h)
-                    db.add(card)
-                    db.flush()
-                    for z in zones:
-                        db.add(OcclusionZone(card_id=card.id, label=z["label"],
-                                             x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
-                    created += 1
-                    page_result["status"] = "created"
-                    page_result["zones"] = len(zones)
-                else:
-                    skipped += 1
-                    page_result["reason"] = "no text zones found"
+                # Always create a card for every slide — students must not miss any content.
+                card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
+                            image_path=image_path, image_width=img_w, image_height=img_h)
+                db.add(card)
+                db.flush()
+                for z in (zones or []):
+                    db.add(OcclusionZone(card_id=card.id, label=z["label"],
+                                         x=z["x"], y=z["y"], width=z["width"], height=z["height"]))
+                created += 1
+                page_result: dict = {"page": page_num, "status": "created", "zones": len(zones or []), "diagrams": 0}
 
                 for spec in diagram_specs:
                     # Only create a diagram card if the vision model found zones to study
