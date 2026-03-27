@@ -94,6 +94,7 @@ async def register(request: Request, payload: UserRegister, db: Session = Depend
     except Exception as exc:
         logger.warning("Could not send verification email to %s: %s", payload.email, exc)
 
+    logger.info("REGISTER email=%s", payload.email)
     return user
 
 
@@ -102,19 +103,24 @@ async def register(request: Request, payload: UserRegister, db: Session = Depend
 async def login(request: Request, payload: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if not user:
+        logger.warning("LOGIN_FAILED email=%s reason=user_not_found ip=%s", payload.email, request.client.host if request.client else "unknown")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     # Run bcrypt in a thread so it doesn't block the event loop
     loop = asyncio.get_running_loop()
     valid = await loop.run_in_executor(None, verify_password, payload.password, user.hashed_password)
     if not valid:
+        logger.warning("LOGIN_FAILED email=%s reason=bad_password ip=%s", payload.email, request.client.host if request.client else "unknown")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
     if not user.is_active:
+        logger.warning("LOGIN_FAILED email=%s reason=suspended ip=%s", payload.email, request.client.host if request.client else "unknown")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
     if not user.is_verified:
+        logger.warning("LOGIN_FAILED email=%s reason=unverified ip=%s", payload.email, request.client.host if request.client else "unknown")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Please verify your email before logging in. Check your inbox for the verification link.",
         )
+    logger.info("LOGIN_SUCCESS email=%s ip=%s", payload.email, request.client.host if request.client else "unknown")
     token = create_access_token(subject=user.email)
     return {"access_token": token, "token_type": "bearer"}
 
@@ -149,6 +155,7 @@ async def change_password(payload: ChangePasswordRequest, current_user: User = D
     hashed = await loop.run_in_executor(None, hash_password, payload.new_password)
     current_user.hashed_password = hashed
     db.commit()
+    logger.info("PASSWORD_CHANGED email=%s", current_user.email)
     return {"ok": True}
 
 
@@ -265,4 +272,5 @@ async def reset_password(request: Request, payload: ResetPasswordRequest, db: Se
     user.hashed_password = await loop.run_in_executor(None, hash_password, payload.new_password)
     record.used = True
     db.commit()
+    logger.info("PASSWORD_RESET email=%s", user.email)
     return {"ok": True, "message": "Password updated. You can now log in."}

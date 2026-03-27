@@ -9,6 +9,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+_ALLOWED_MIME_MAGIC: dict = {
+    b"%PDF": "application/pdf",
+    b"\x89PNG": "image/png",
+    b"\xff\xd8\xff": "image/jpeg",
+    b"GIF8": "image/gif",
+    b"RIFF": "image/webp",  # RIFF....WEBP — checked further below
+}
+_ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+
+def _validate_file_content(content: bytes, filename: str) -> None:
+    """Reject files whose magic bytes don't match an allowed type."""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"File type '{ext}' is not allowed")
+    for magic, _ in _ALLOWED_MIME_MAGIC.items():
+        if content[:len(magic)] == magic:
+            # Extra check: RIFF must also have WEBP marker at offset 8
+            if magic == b"RIFF" and content[8:12] != b"WEBP":
+                continue
+            return
+    raise HTTPException(status_code=400, detail="File content does not match its extension")
+
+
 def _count_pdf_pages(data: bytes) -> int:
     """Count PDF pages from raw bytes without loading PyMuPDF."""
     import re
@@ -121,6 +145,7 @@ async def generate_cards(
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(status_code=413, detail=f"File '{upload.filename}' exceeds the 50 MB limit")
         fname = upload.filename or "upload"
+        _validate_file_content(content, fname)
         ext = os.path.splitext(fname)[1].lower() or ".bin"
 
         saved_name = f"{uuid.uuid4()}{ext}"
@@ -161,6 +186,7 @@ async def upload_pages(
     if len(content) > 50 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File exceeds the 50 MB limit")
     fname = file.filename or "upload"
+    _validate_file_content(content, fname)
     ext = os.path.splitext(fname)[1].lower()
 
     user_dir = os.path.join(_ABS_UPLOAD_DIR, str(current_user.id))

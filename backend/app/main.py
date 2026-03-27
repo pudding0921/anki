@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
@@ -96,9 +97,21 @@ async def lifespan(app: FastAPI):
         pass
 
 
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
 app = FastAPI(title="FlowCard", version="0.3.0", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS — only allow localhost in non-production
 _is_production = settings.FRONTEND_URL.startswith("https://flowcard.pro")
