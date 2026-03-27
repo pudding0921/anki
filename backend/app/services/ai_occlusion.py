@@ -263,19 +263,23 @@ def _extract_title_info(page) -> tuple:
 
     max_size = max(s["size"] for s in all_spans)
 
-    # Title = all spans whose font size is within 30% of the largest font.
-    # Threshold lowered from 0.85 → 0.70 so multi-line titles with mixed fonts
-    # (e.g. monospace "enum" inline with large-font text) are fully captured.
-    title_spans = [s for s in all_spans if s["size"] >= max_size * 0.70]
+    # Title = spans very close to the largest font (within 10%).
+    # Conservative threshold: body text is typically 60-80% of title size,
+    # so 0.90 keeps only the actual title text and avoids absorbing body text.
+    title_spans = [s for s in all_spans if s["size"] >= max_size * 0.90]
 
-    # Also include any text in the top 22% of the page by y-position — catches
-    # second-line title words that use a slightly smaller or different font.
+    # Secondary: catch second-line title words that may use a slightly smaller
+    # font. Only apply to the top 12% of the page AND font must be > 70% of max
+    # to exclude body text that happens to appear near the top.
     try:
         page_h = page.rect.height
-        top_cutoff = page_h * 0.22
+        top_cutoff = page_h * 0.12
+        min_title_size = max_size * 0.70
+        title_span_set = set(id(s) for s in title_spans)
         for s in all_spans:
-            if s not in title_spans and s["bbox"][1] < top_cutoff:
+            if id(s) not in title_span_set and s["bbox"][1] < top_cutoff and s["size"] >= min_title_size:
                 title_spans.append(s)
+                title_span_set.add(id(s))
     except Exception:
         pass
 
