@@ -545,7 +545,9 @@ def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) 
 def _call_gemini_occlusion(prompt: str) -> Optional[str]:
     """Call Gemini 2.0 Flash for key-term extraction.
     Primary model: best free instruction-following model available.
+    Retries up to 3 times with exponential backoff on rate-limit (429) errors.
     Falls back to Groq if unavailable."""
+    import time as _time
     from app.core.config import settings
     if not settings.GEMINI_API_KEY:
         return None
@@ -560,13 +562,28 @@ def _call_gemini_occlusion(prompt: str) -> Optional[str]:
                 "You return short keywords and key phrases (1-4 words) that students must memorise — never full sentences."
             ),
         )
-        response = model.generate_content(
-            prompt,
-            generation_config={"temperature": 0.0, "max_output_tokens": 300},
-        )
-        return response.text or None
+        last_err = None
+        for attempt in range(3):
+            try:
+                response = model.generate_content(
+                    prompt,
+                    generation_config={"temperature": 0.0, "max_output_tokens": 300},
+                )
+                return response.text or None
+            except Exception as e:
+                last_err = e
+                err_str = str(e).lower()
+                # Retry on rate limit (429) with exponential backoff
+                if "429" in err_str or "quota" in err_str or "rate" in err_str:
+                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    logger.warning(f"Gemini rate limit hit (attempt {attempt+1}/3), retrying in {wait}s")
+                    _time.sleep(wait)
+                    continue
+                break  # Non-retryable error
+        logger.warning(f"Gemini 2.0 Flash occlusion call failed: {last_err}")
+        return None
     except Exception as e:
-        logger.warning(f"Gemini 2.0 Flash occlusion call failed: {e}")
+        logger.warning(f"Gemini 2.0 Flash occlusion setup failed: {e}")
         return None
 
 

@@ -151,7 +151,9 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
                 return idx, None
 
         llm_inputs = [(i, td) for i, w, h, img_url, td in renders_done]
-        llm_workers = min(n_pages, 10)  # cap parallelism to avoid Groq rate limits
+        # 4 parallel LLM workers: fast enough for 50-slide PDFs, avoids burst
+        # rate-limit spikes when multiple users upload simultaneously.
+        llm_workers = min(n_pages, 4)
         with ThreadPoolExecutor(max_workers=llm_workers) as llm_pool:
             for idx, pre_zones in llm_pool.map(_run_zones, llm_inputs):
                 pages[idx]["pre_zones"] = pre_zones
