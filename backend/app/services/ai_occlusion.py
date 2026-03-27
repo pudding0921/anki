@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards for pre-health university students (biology, chemistry, biochemistry, anatomy, physiology, pharmacology, microbiology, genetics, pathology). Your job is to extract every keyword, key phrase, or vocabulary term a student MUST memorise from the slide body text below. Return only those terms, nothing else.
+KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards for university students (biology, chemistry, anatomy, physiology, pharmacology, biochemistry, microbiology, genetics, pathology, computer science, and other subjects). Your job is to extract every keyword, key phrase, or vocabulary term a student MUST memorise from the slide body text below. Return only those terms, nothing else.
 
 NEVER OCCLUDE THE SLIDE TITLE: {title}
 
@@ -38,14 +38,15 @@ Does the remaining text form a clear question with exactly ONE correct answer?
 ══════════════════════════════════════════════════════
   ABSOLUTE HARD RULES
 ══════════════════════════════════════════════════════
-R1. MAXIMUM 4 WORDS per term. 1–2 words ideal; multi-word science phrases up to 4 words allowed.
+R1. MAXIMUM 4 WORDS per term. 1–2 words ideal; multi-word science/CS phrases up to 4 words allowed.
 R2. NEVER return a full sentence or clause (subject + verb + object together).
     Do NOT start a term with: "the", "a", "an", "that", "which", "does", "do", "not", "and", "or"
 R3. NEVER return the slide title or any word from it.
-R4. ALWAYS return chemical names, drug names, gene names, enzyme names, structure names, values.
-R5. Return 3–8 terms total. Cover ALL important vocabulary — multiple terms per bullet if needed.
+R4. ALWAYS return chemical names, drug names, gene names, enzyme names, structure names, values, operators, keywords.
+R5. Return ALL terms students must memorise — no cap. Every vocabulary term counts.
 R6. Greek letters (alpha, beta, gamma, delta, etc.) ARE valid science terms — include them.
 R7. Chemical formulas and notation (CO2, H2O, Na+, ATP, NADH, ~P, ΔG) ARE valid — always return them.
+R8. NEVER return footer content: copyright notices, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, Springer, Oxford, Cambridge, Saunders, Mosby), "©", "Inc.", "All rights reserved", page numbers, footnotes, watermarks, or any attribution text at the bottom of slides.
 
 ══════════════════════════════════════════════════════
   PATTERN GUIDE — science subjects (primary audience)
@@ -105,11 +106,12 @@ PATTERN 10 — Programming / CS (if slide is CS, not science)
 ══════════════════════════════════════════════════════
   QUICK SELF-CHECK before returning each term
 ══════════════════════════════════════════════════════
-  □ Is it 1–4 words?                                         must be YES
-  □ Does it start with a banned filler word (R2)?            must be NO
-  □ If I blank it out, does a readable question remain?      must be YES
-  □ Is it a specific, testable science/medical term?         must be YES
-  □ Did I include ALL chemical names, drug names, lab values? must be YES
+  □ Is it 1–4 words?                                              must be YES
+  □ Does it start with a banned filler word (R2)?                 must be NO
+  □ If I blank it out, does a readable question remain?           must be YES
+  □ Is it a specific, testable vocabulary term?                   must be YES
+  □ Did I include ALL chemical/drug names, lab values, operators? must be YES
+  □ Is it copyright, publisher name, page number, or footer text? must be NO
 {checklist_section}
 ════ SLIDE BODY TEXT (title already removed) ════
 {body_text}
@@ -140,7 +142,8 @@ VISION_PROMPT = (
     "  • 1–4 words per box — single words preferred, key phrases up to 4 words allowed\n"
     "  • NEVER cover the slide title / heading (largest text)\n"
     "  • NEVER cover a full sentence\n"
-    "  • NEVER cover generic filler words (is, are, the, a, an, etc.)\n\n"
+    "  • NEVER cover generic filler words (is, are, the, a, an, etc.)\n"
+    "  • NEVER cover footer content: copyright notices, publisher names (Pearson, McGraw, Elsevier, Wiley, etc.), page numbers, watermarks, footnotes, or any attribution text at the slide bottom\n\n"
 
     "EXAMPLES:\n"
     "  Diagram label 'Left Ventricle' near heart → box over 'Left Ventricle'\n"
@@ -204,6 +207,7 @@ NEVER box:
   • Full sentences or clauses (more than 4 words that form a complete thought)
   • Pure filler: is, are, was, the, a, an, that, which, and, or, but
   • Code example variable/constant names used as mere illustrations (MONDAY, x, arr, i)
+  • Footer content: copyright notices, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, Springer, etc.), "©", "All rights reserved", page numbers, footnotes, watermarks, or any attribution text at the slide bottom
 
 ═══════════════════════════════════════════
 STEP 3 — OUTPUT (strict JSON, no markdown)
@@ -308,20 +312,41 @@ def _extract_page_text_data(page) -> tuple:
     """Extract all text data from a PyMuPDF page as plain Python objects.
     Must be called while the page/doc is held by the current thread.
     Returns: (words, title_str, title_word_set, title_max_y, body_text, blocks)
+
+    Footer stripping: the bottom 13% of the page (copyright notices, publisher
+    info, page numbers) is excluded from words and blocks so it never reaches
+    the LLM prompt or zone matcher.
     """
     try:
-        words = page.get_text("words")
+        raw_words = page.get_text("words")
     except Exception:
-        words = []
+        raw_words = []
     try:
-        blocks = page.get_text("dict")["blocks"]
+        raw_blocks = page.get_text("dict")["blocks"]
     except Exception:
-        blocks = []
+        raw_blocks = []
+
+    # Exclude footer zone — bottom 13% of page height
+    page_height = page.rect.height if hasattr(page, "rect") and page.rect.height > 0 else 0
+    footer_min_y = page_height * 0.87 if page_height > 0 else float("inf")
+
+    words = [w for w in raw_words if w[3] < footer_min_y]
+    blocks = [b for b in raw_blocks if b.get("bbox", [0, 0, 0, 9999])[1] < footer_min_y]
+
     title_str, title_word_set, title_max_y = _extract_title_info(page)
     body_words = [w for w in words if w[1] >= title_max_y - 2]
     body_text = " ".join(w[4] for w in body_words if w[4].strip())
     return words, title_str, title_word_set, title_max_y, body_text, blocks
 
+
+# Publisher / copyright terms that should NEVER be occluded.
+# These appear in slide footers and are never educational content.
+_FOOTER_BLOCKED_TERMS = {
+    "copyright", "©", "reserved", "rights",
+    "pearson", "mcgraw", "mcgraw-hill", "elsevier", "wiley", "cengage",
+    "springer", "oxford", "cambridge", "saunders", "mosby", "lippincott",
+    "wolters", "kluwer", "thieme", "academia", "scholastic",
+}
 
 _FILLER_WORDS = {
     "is", "are", "was", "were", "be", "been", "being",
@@ -471,6 +496,15 @@ def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) 
         # Skip if it overlaps with the title
         if _term_overlaps_title(term, title_words, title_str):
             logger.info(f"Rejected (title overlap): {repr(term)}")
+            continue
+
+        # Skip copyright/publisher/footer terms
+        term_lower_clean = term.lower().strip(".,;:!?()'\"©®")
+        if term_lower_clean in _FOOTER_BLOCKED_TERMS:
+            logger.info(f"Rejected (footer/copyright term): {repr(term)}")
+            continue
+        if any(blocked in term_lower_clean for blocked in ("copyright", "©", "all rights", "rights reserved")):
+            logger.info(f"Rejected (copyright phrase): {repr(term)}")
             continue
 
         # Skip very short terms
@@ -678,7 +712,7 @@ def _formatting_fallback(
                         "height": round((bbox[3] - bbox[1]) * scale, 1),
                     })
 
-    # Deduplicate by label, cap at 6
+    # Deduplicate by label
     seen: set = set()
     deduped = []
     for z in zones:
@@ -686,7 +720,7 @@ def _formatting_fallback(
             seen.add(z["label"])
             deduped.append(z)
 
-    return deduped[:6]
+    return deduped
 
 
 def _formatting_fallback_from_blocks(
@@ -745,7 +779,7 @@ def _formatting_fallback_from_blocks(
         if z["label"] not in seen:
             seen.add(z["label"])
             deduped.append(z)
-    return deduped[:6]
+    return deduped
 
 
 def _zones_from_text_data(
@@ -789,8 +823,6 @@ def _zones_from_text_data(
                     "width": round((w[2] - w[0]) * scale, 1),
                     "height": round((w[3] - w[1]) * scale, 1),
                 })
-                if len(zones) >= 3:
-                    break
         if zones:
             logger.info(f"Last-resort: created {len(zones)} zone(s) from raw body words")
 
