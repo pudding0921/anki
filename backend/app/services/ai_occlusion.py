@@ -1151,7 +1151,20 @@ def diagram_cards_for_pdf_page(page) -> List[Dict]:
     results = []
     seen_xrefs: set = set()
 
+    # Page dimensions — used to filter out background/template images
+    try:
+        page_w = page.rect.width
+        page_h = page.rect.height
+        page_area = page_w * page_h
+    except Exception:
+        page_w, page_h, page_area = 612, 792, 484704  # US letter fallback
+
     for img_info in img_info_list:
+        # Stop after 2 diagram cards per slide — more than that is usually
+        # template/background images, not real diagrams worth studying
+        if len(results) >= 2:
+            break
+
         xref = img_info.get("xref", 0)
         if not xref or xref in seen_xrefs:
             continue
@@ -1162,9 +1175,18 @@ def diagram_cards_for_pdf_page(page) -> List[Dict]:
 
         img_w_pts = bbox[2] - bbox[0]
         img_h_pts = bbox[3] - bbox[1]
+        img_area = img_w_pts * img_h_pts
 
-        # Skip tiny images — icons, logos, decorative elements
+        # Skip tiny images — icons, logos, decorative elements (< 80pt either side)
         if img_w_pts < 80 or img_h_pts < 80:
+            continue
+
+        # Skip images that cover < 20% of the slide — likely decorative/background
+        if page_area > 0 and (img_area / page_area) < 0.20:
+            continue
+
+        # Skip full-page background images (> 85% of slide area) — template chrome
+        if page_area > 0 and (img_area / page_area) > 0.85:
             continue
 
         try:

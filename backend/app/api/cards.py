@@ -455,6 +455,9 @@ async def _run_batch_occlusion_job_inner(
                 skipped += 1
                 page_result["reason"] = "no text zones found"
             for spec in diag_specs:
+                # Only create a diagram card if the vision model found zones to study
+                if not spec.get("zones"):
+                    continue
                 diag_card = Card(deck_id=deck_id, card_type="occlusion", front="", back="",
                                  image_path=spec["image_path"],
                                  image_width=spec["width"], image_height=spec["height"])
@@ -608,6 +611,9 @@ async def _run_batch_occlusion_job_inner(
                     page_result["reason"] = "no text zones found"
 
                 for spec in diagram_specs:
+                    # Only create a diagram card if the vision model found zones to study
+                    if not spec.get("zones"):
+                        continue
                     diag_ext = spec["ext"] if spec["ext"] in ("png", "jpg", "jpeg") else "png"
                     diag_name = f"{uuid.uuid4()}.{diag_ext}"
                     with open(os.path.join(user_dir, diag_name), "wb") as f:
