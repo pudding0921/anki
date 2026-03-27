@@ -202,60 +202,69 @@ async def upload_pages(
     if os.environ.get("MODAL_TOKEN_ID"):
         try:
             render_pdf_pages = _get_modal_fn("render_pdf_pages")
-            loop = asyncio.get_running_loop()
-            # Do NOT await here — start the future immediately and return the
-            # StreamingResponse so the connection opens right away.
-            # render_pdf_pages.remote can take 30-120s for large PDFs; awaiting
-            # it before streaming would leave the connection idle long enough for
-            # Render's 30-second proxy timeout to kill it ("Failed to fetch").
-            modal_future = loop.run_in_executor(
-                None, render_pdf_pages.remote, content, current_user.id
-            )
-            del content  # executor holds the ref; free local name
-
-            async def stream_modal_pages():
-                try:
-                    # Emit total immediately — we know page_count before Modal starts,
-                    # so the UI shows the page count right away instead of waiting.
-                    yield json.dumps({"type": "total", "total": page_count}) + "\n"
-
-                    # Heartbeat every 3 s keeps the connection alive through Render's
-                    # 30-second idle proxy timeout while Modal renders and runs LLMs.
-                    while not modal_future.done():
-                        yield json.dumps({"type": "heartbeat"}) + "\n"
-                        await asyncio.sleep(3)
-
-                    try:
-                        pages = modal_future.result()
-                    except Exception as exc:
-                        err_msg = f"{type(exc).__name__}: {str(exc)[:300]}"
-                        logger.warning(f"Modal render failed: {err_msg}", exc_info=True)
-                        yield json.dumps({"type": "error", "detail": f"PDF rendering failed — {err_msg}"}) + "\n"
-                        return
-
-                    for p in pages:
-                        # Omit pre_zones from per-page events — it can be large
-                        # and the frontend only needs it in the done.pages payload.
-                        slim = {k: v for k, v in p.items() if k != "pre_zones"}
-                        yield json.dumps({"type": "page", **slim}) + "\n"
-                    yield json.dumps({"type": "done", "pages": pages}) + "\n"
-
-                except GeneratorExit:
-                    pass  # client disconnected — clean exit, no error
-                except Exception as exc:
-                    logger.error(f"stream_modal_pages crashed: {exc}")
-                    try:
-                        yield json.dumps({"type": "error", "detail": "Internal error — please try again"}) + "\n"
-                    except Exception:
-                        pass  # can't write to a closed connection
-
+        except Exception as exc:
+            import traceback
+            logger.error(f"Modal function lookup failed: {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
+            async def _modal_setup_error():
+                yield json.dumps({"type": "error", "detail": f"Modal setup failed: {type(exc).__name__}: {str(exc)[:300]}"}) + "\n"
             return StreamingResponse(
-                stream_modal_pages(),
+                _modal_setup_error(),
                 media_type="application/x-ndjson",
                 headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
             )
-        except Exception as exc:
-            logger.warning(f"Modal render_pdf_pages failed, falling back to local: {exc}")
+
+        loop = asyncio.get_running_loop()
+        # Do NOT await here — start the future immediately and return the
+        # StreamingResponse so the connection opens right away.
+        # render_pdf_pages.remote can take 30-120s for large PDFs; awaiting
+        # it before streaming would leave the connection idle long enough for
+        # Render's 30-second proxy timeout to kill it ("Failed to fetch").
+        modal_future = loop.run_in_executor(
+            None, render_pdf_pages.remote, content, current_user.id
+        )
+        del content  # executor holds the ref; free local name
+
+        async def stream_modal_pages():
+            try:
+                # Emit total immediately — we know page_count before Modal starts,
+                # so the UI shows the page count right away instead of waiting.
+                yield json.dumps({"type": "total", "total": page_count}) + "\n"
+
+                # Heartbeat every 3 s keeps the connection alive through Render's
+                # 30-second idle proxy timeout while Modal renders and runs LLMs.
+                while not modal_future.done():
+                    yield json.dumps({"type": "heartbeat"}) + "\n"
+                    await asyncio.sleep(3)
+
+                try:
+                    pages = modal_future.result()
+                except Exception as exc:
+                    err_msg = f"{type(exc).__name__}: {str(exc)[:300]}"
+                    logger.warning(f"Modal render failed: {err_msg}", exc_info=True)
+                    yield json.dumps({"type": "error", "detail": f"PDF rendering failed — {err_msg}"}) + "\n"
+                    return
+
+                for p in pages:
+                    # Omit pre_zones from per-page events — it can be large
+                    # and the frontend only needs it in the done.pages payload.
+                    slim = {k: v for k, v in p.items() if k != "pre_zones"}
+                    yield json.dumps({"type": "page", **slim}) + "\n"
+                yield json.dumps({"type": "done", "pages": pages}) + "\n"
+
+            except GeneratorExit:
+                pass  # client disconnected — clean exit, no error
+            except Exception as exc:
+                logger.error(f"stream_modal_pages crashed: {exc}")
+                try:
+                    yield json.dumps({"type": "error", "detail": f"Internal error: {type(exc).__name__}: {str(exc)[:200]}"}) + "\n"
+                except Exception:
+                    pass  # can't write to a closed connection
+
+        return StreamingResponse(
+            stream_modal_pages(),
+            media_type="application/x-ndjson",
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        )
 
     # ── Local fallback: render one page at a time ─────────────────────────────
     del content  # free raw PDF bytes — already saved to disk above
@@ -268,7 +277,7 @@ async def upload_pages(
             try:
                 import fitz as _fitz
             except ImportError:
-                yield json.dumps({"type": "error", "detail": "PDF rendering unavailable — Modal not configured"}) + "\n"
+                yield json.dumps({"type": "error", "detail": "PDF rendering unavailable — PyMuPDF not installed locally and MODAL_TOKEN_ID is not set"}) + "\n"
                 return
             loop = asyncio.get_running_loop()
             pages = []
