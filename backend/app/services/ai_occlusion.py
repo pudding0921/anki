@@ -908,11 +908,16 @@ def _zones_from_text_data(
     Used by render_pdf_pages to parallelize LLM calls across pages."""
     zones: List[Dict] = []
 
-    # Section-divider detection: short body with no bullets, colons, or facts
-    # (e.g. "11.2 Combining Data into Structures") — nothing to occlude
     body_stripped = body_text.strip()
+
+    # Section-divider detection: a plain short subtitle with no code, no facts.
+    # Must be very conservative — CS slides often have short code snippets that
+    # look similar (e.g. "workDay = 3; // Error!"). Any programming character
+    # or digit immediately disqualifies the slide from being a section divider.
+    _CODE_CHARS = frozenset('{};=()[]<>/*&|^~`\\_@#$%!0123456789')
     is_section_divider = (
-        len(body_stripped) < 80
+        len(body_stripped) < 50
+        and not any(c in _CODE_CHARS for c in body_stripped)
         and ":" not in body_stripped
         and "." not in body_stripped
         and body_stripped.count("\n") < 2
