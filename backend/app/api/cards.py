@@ -184,7 +184,8 @@ async def upload_pages(
     # ── Modal path: offload rendering to serverless containers ───────────────
     if os.environ.get("MODAL_TOKEN_ID"):
         try:
-            from app.services.modal_tasks import render_pdf_pages
+            import modal
+            render_pdf_pages = modal.Function.lookup("flowcard", "render_pdf_pages")
             loop = asyncio.get_running_loop()
             # Do NOT await here — start the future immediately and return the
             # StreamingResponse so the connection opens right away.
@@ -443,7 +444,8 @@ async def _run_batch_occlusion_job_inner(
         # ── Modal path ────────────────────────────────────────────────────────
         if os.environ.get("MODAL_TOKEN_ID"):
             try:
-                from app.services.modal_tasks import analyze_page as _modal_analyze
+                import modal
+                _modal_analyze = modal.Function.lookup("flowcard", "analyze_page")
                 pages_with_uid = [{**p, "_user_id": user_id} for p in pages]
 
                 # Pages whose text zones were pre-extracted in render_pdf_pages can be
