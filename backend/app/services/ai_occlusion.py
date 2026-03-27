@@ -542,9 +542,36 @@ def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) 
 
 # ── PDF processing (primary — most reliable) ──────────────────────────────────
 
+def _call_gemini_occlusion(prompt: str) -> Optional[str]:
+    """Call Gemini 2.0 Flash for key-term extraction.
+    Primary model: best free instruction-following model available.
+    Falls back to Groq if unavailable."""
+    from app.core.config import settings
+    if not settings.GEMINI_API_KEY:
+        return None
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            "gemini-2.0-flash",
+            system_instruction=(
+                "You are an Anki flashcard expert. "
+                "You follow instructions exactly and return only valid JSON arrays. "
+                "You return short keywords and key phrases (1-4 words) that students must memorise — never full sentences."
+            ),
+        )
+        response = model.generate_content(
+            prompt,
+            generation_config={"temperature": 0.0, "max_output_tokens": 300},
+        )
+        return response.text or None
+    except Exception as e:
+        logger.warning(f"Gemini 2.0 Flash occlusion call failed: {e}")
+        return None
+
+
 def _call_groq_occlusion(prompt: str) -> Optional[str]:
-    """Call Groq with a large, instruction-following model for occlusion term selection.
-    Uses llama-3.3-70b-versatile instead of the shared 8b-instant model."""
+    """Call Groq llama-3.3-70b-versatile as fallback for occlusion term selection."""
     from app.core.config import settings
     if not settings.GROQ_API_KEY:
         return None
@@ -578,7 +605,8 @@ def _ask_llm_for_key_terms(
     title: str,
     checklist_text: Optional[str] = None,
 ) -> List[str]:
-    """Send slide body text (title stripped) to LLM, get back key terms."""
+    """Send slide body text (title stripped) to LLM, get back key terms.
+    Model priority: Gemini 2.0 Flash (primary) → Groq 70B (fallback)."""
     from app.services.llm import _call_ollama
 
     checklist_section = (
@@ -589,8 +617,8 @@ def _ask_llm_for_key_terms(
         body_text=body_text[:4000],
         checklist_section=checklist_section,
     )
-    # Try Ollama (local) first, then Groq 70B (large, instruction-following)
-    raw = _call_ollama(prompt) or _call_groq_occlusion(prompt)
+    # Gemini 2.0 Flash primary (best free instruction-following), Groq 70b fallback
+    raw = _call_ollama(prompt) or _call_gemini_occlusion(prompt) or _call_groq_occlusion(prompt)
     if not raw:
         return []
 
