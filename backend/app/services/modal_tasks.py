@@ -52,23 +52,17 @@ _secret = modal.Secret.from_name("flowcard-secrets")
 @app.function(secrets=[_secret], timeout=600, memory=2048)
 def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
     """
-    Render every page of a PDF at 2x scale, upload each image to Supabase,
-    and pre-extract text zones using PDF text positions + LLM.
+    Render every page of a PDF at 2x scale and upload each image to Supabase.
+    Optionally pre-extracts text zones via LLM (Phase 2) to skip analyze_page later.
 
-    All Supabase uploads AND all Groq LLM zone-extraction calls run in parallel
-    via a shared thread pool — so for an N-page PDF the bottleneck is
-    max(render_time, slowest_upload, slowest_LLM_call) instead of
-    N × LLM_call_time (the previous sequential approach).
-
-    Key insight: text data is extracted from each page while still in the main
-    rendering loop (CPU-only, <1ms), then the LLM call is submitted to the pool
-    so it runs concurrently with the next page renders and all uploads.
+    Two fully isolated phases so a Zone/LLM failure can NEVER prevent images from uploading:
+      Phase 1 — render + upload (critical, always completes)
+      Phase 2 — LLM zone extraction (optional, any failure leaves pre_zones=None)
     """
     sys.path.insert(0, "/")
     import fitz
     from concurrent.futures import ThreadPoolExecutor
     from app.services.storage import upload_file as _upload
-    from app.services.ai_occlusion import _extract_page_text_data, _zones_from_text_data
 
     RENDER_SCALE = 2
 
@@ -78,69 +72,94 @@ def render_pdf_pages(pdf_bytes: bytes, user_id: int) -> list:
 
     doc = fitz.open(pdf_path)
     n_pages = len(doc)
-    # Workers: 1 PDF upload + n page uploads + n LLM calls (all I/O-bound).
-    # Capped at 25 to stay within Modal container memory limits.
-    max_workers = min(n_pages * 2 + 1, 25)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        # Start the source-PDF upload immediately in the background.
+    # ── Phase 1: Render all pages + upload to Supabase ────────────────────────
+    # AI imports are intentionally deferred to Phase 2 so an ImportError or any
+    # other AI failure here cannot prevent the images from being uploaded.
+    upload_workers = min(n_pages + 1, 20)
+
+    with ThreadPoolExecutor(max_workers=upload_workers) as upload_pool:
         pdf_key = f"{user_id}/{uuid.uuid4()}.pdf"
-        pdf_future = pool.submit(_upload, pdf_bytes, pdf_key, "application/pdf")
+        pdf_future = upload_pool.submit(_upload, pdf_bytes, pdf_key, "application/pdf")
 
-        page_meta = []
+        # (page_index, width, height, upload_future, raw_text_data_or_None)
+        renders: list = []
+
         for i, page in enumerate(doc):
-            # ── Render (CPU-bound, sequential) ─────────────────────────────
             pix = page.get_pixmap(matrix=fitz.Matrix(RENDER_SCALE, RENDER_SCALE))
             img_bytes = pix.tobytes("png")
             w, h = pix.width, pix.height
             pix = None
 
-            # ── Submit upload immediately (I/O-bound, runs in pool) ────────
             img_key = f"{user_id}/{uuid.uuid4()}.png"
-            upload_future = pool.submit(_upload, img_bytes, img_key, "image/png")
-            img_bytes = None  # pool holds the only remaining ref
+            upload_future = upload_pool.submit(_upload, img_bytes, img_key, "image/png")
+            img_bytes = None  # upload_pool holds the only remaining ref
 
-            # ── Extract text data while holding the page (CPU-only, ~1ms) ──
-            # Then submit the LLM call to the pool so it runs in parallel
-            # with the next page renders and all ongoing uploads.
+            # Extract plain-Python text data while still holding the page object
+            # (needs page; ~1ms CPU — no LLM involved here).
+            text_data = None
             try:
-                words, title_str, title_word_set, title_max_y, body_text, blocks = (
-                    _extract_page_text_data(page)
-                )
-                zones_future = pool.submit(
-                    _zones_from_text_data,
-                    words, title_str, title_word_set, title_max_y, body_text, blocks,
-                    RENDER_SCALE, None,
-                )
+                from app.services.ai_occlusion import _extract_page_text_data
+                text_data = _extract_page_text_data(page)
             except Exception as e:
                 logger.warning(f"Text extraction failed p{i+1}: {e}")
-                zones_future = None
 
-            page_meta.append((i, upload_future, w, h, zones_future))
+            renders.append((i, w, h, upload_future, text_data))
 
-        # ── Collect results (futures resolve as work completes) ────────────
         source_pdf_url = pdf_future.result() or ""
-        pages = []
-        for i, upload_future, w, h, zones_future in page_meta:
-            img_url = upload_future.result()
-            pre_zones = None
-            if zones_future is not None:
-                try:
-                    pre_zones = zones_future.result()
-                except Exception as e:
-                    logger.warning(f"Zone extraction failed p{i+1}: {e}")
-            pages.append({
-                "image_path": img_url,
-                "width": w,
-                "height": h,
-                "page": i + 1,
-                "source_pdf": source_pdf_url,
-                "render_scale": RENDER_SCALE,
-                "pre_zones": pre_zones,
-            })
+        # Resolve all upload futures — storage.upload_file never raises, returns None on error
+        renders_done = [
+            (i, w, h, upload_fut.result(), text_data)
+            for i, w, h, upload_fut, text_data in renders
+        ]
 
     doc.close()
     os.unlink(pdf_path)
+
+    # Build output pages with pre_zones=None — Phase 2 fills them in if it succeeds
+    pages = [
+        {
+            "image_path": img_url,
+            "width": w,
+            "height": h,
+            "page": i + 1,
+            "source_pdf": source_pdf_url,
+            "render_scale": RENDER_SCALE,
+            "pre_zones": None,
+        }
+        for i, w, h, img_url, _ in renders_done
+    ]
+
+    # ── Phase 2: LLM zone extraction (completely optional) ───────────────────
+    # Capped at 10 parallel Groq calls to stay under rate limits.
+    # Any failure here is fully isolated — pages[] is already valid from Phase 1.
+    try:
+        from app.services.ai_occlusion import _zones_from_text_data
+
+        def _run_zones(args):
+            idx, text_data = args
+            if text_data is None:
+                return idx, None
+            words, title_str, title_word_set, title_max_y, body_text, blocks = text_data
+            try:
+                return idx, _zones_from_text_data(
+                    words, title_str, title_word_set, title_max_y,
+                    body_text, blocks, RENDER_SCALE, None,
+                )
+            except Exception as e:
+                logger.warning(f"Zone LLM failed p{idx+1}: {e}")
+                return idx, None
+
+        llm_inputs = [(i, td) for i, w, h, img_url, td in renders_done]
+        llm_workers = min(n_pages, 10)  # cap parallelism to avoid Groq rate limits
+        with ThreadPoolExecutor(max_workers=llm_workers) as llm_pool:
+            for idx, pre_zones in llm_pool.map(_run_zones, llm_inputs):
+                pages[idx]["pre_zones"] = pre_zones
+
+    except Exception as e:
+        logger.warning(f"Zone extraction phase failed entirely (p1 results still valid): {e}")
+        # pre_zones stays None for all pages — analyze_page handles them in the batch job
+
     return pages
 
 

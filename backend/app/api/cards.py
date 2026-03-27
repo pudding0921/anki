@@ -211,8 +211,9 @@ async def upload_pages(
                     try:
                         pages = modal_future.result()
                     except Exception as exc:
-                        logger.warning(f"Modal render failed: {exc}")
-                        yield json.dumps({"type": "error", "detail": "PDF rendering failed — please try again"}) + "\n"
+                        err_msg = f"{type(exc).__name__}: {str(exc)[:300]}"
+                        logger.warning(f"Modal render failed: {err_msg}", exc_info=True)
+                        yield json.dumps({"type": "error", "detail": f"PDF rendering failed — {err_msg}"}) + "\n"
                         return
 
                     for p in pages:
