@@ -7,6 +7,14 @@ from app.database import get_db
 router = APIRouter()
 
 
+@router.get("/ping")
+def ping():
+    """Lightweight keep-alive endpoint — no DB, always 200.
+    Use this for UptimeRobot / uptime monitors so a transient DB
+    hiccup never causes the monitor to pause and Render to spin down."""
+    return {"status": "ok"}
+
+
 @router.get("/health")
 def health_check(db: Session = Depends(get_db)):
     try:

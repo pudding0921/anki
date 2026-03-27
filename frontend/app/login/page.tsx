@@ -21,7 +21,7 @@ export default function LoginPage() {
     const warmStart = Date.now();
     let warmTimer: ReturnType<typeof setTimeout>;
     warmTimer = setTimeout(() => setWarming(true), 1500);
-    fetch(`${API_URL}/api/health`)
+    fetch(`${API_URL}/api/ping`)
       .catch(() => {})
       .finally(() => {
         clearTimeout(warmTimer);

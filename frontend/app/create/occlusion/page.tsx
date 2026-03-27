@@ -141,6 +141,54 @@ export default function OcclusionPage() {
     }
   }
 
+  async function uploadPages(file: File, authHeader: Record<string, string>): Promise<PageInfo[]> {
+    const uploadForm = new FormData();
+    uploadForm.append("file", file);
+    const uploadRes = await fetch(`${API_URL}/api/cards/upload-pages`, {
+      method: "POST", headers: authHeader, body: uploadForm,
+    });
+    if (!uploadRes.ok) { const d = await uploadRes.json().catch(() => ({})); throw new Error(d.detail || "Upload failed"); }
+
+    let pages: PageInfo[] = [];
+    const reader = uploadRes.body?.getReader();
+    if (!reader) throw new Error("Streaming not supported");
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const evt = JSON.parse(line);
+          if (evt.type === "total") setPageCount(evt.total);
+          else if (evt.type === "page") setUploadedCount((n) => n + 1);
+          else if (evt.type === "done") pages = evt.pages;
+          else if (evt.type === "error") throw new Error(evt.detail || "Server error during upload");
+          else if (evt.type === "heartbeat") { /* keep-alive, ignore */ }
+          else if (Array.isArray(evt.pages)) pages = evt.pages;
+        } catch (parseErr) {
+          if (parseErr instanceof SyntaxError) { /* ignore malformed lines */ }
+          else throw parseErr;
+        }
+      }
+    }
+    if (buf.trim()) {
+      try {
+        const evt = JSON.parse(buf);
+        if (evt.type === "done") pages = evt.pages;
+        else if (evt.type === "error") throw new Error(evt.detail || "Server error during upload");
+        else if (Array.isArray(evt.pages)) pages = evt.pages;
+      } catch (parseErr) {
+        if (!(parseErr instanceof SyntaxError)) throw parseErr;
+      }
+    }
+    return pages;
+  }
+
   async function run(file: File) {
     setError("");
     setStep("uploading");
@@ -149,53 +197,20 @@ export default function OcclusionPage() {
     const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
     try {
-      // Step 1: Render PDF pages (streamed)
+      // Step 1: Render PDF pages (streamed).
+      // Retry once if pages comes back empty — this happens when the Modal
+      // container is cold-starting on first use. The retry succeeds because
+      // the container is warm by then.
       setUploadedCount(0);
-      const uploadForm = new FormData();
-      uploadForm.append("file", file);
-      const uploadRes = await fetch(`${API_URL}/api/cards/upload-pages`, {
-        method: "POST", headers: authHeader, body: uploadForm,
-      });
-      if (!uploadRes.ok) { const d = await uploadRes.json().catch(() => ({})); throw new Error(d.detail || "Upload failed"); }
-
-      let pages: PageInfo[] = [];
-      // Always read as a stream regardless of content-type — handles both
-      // NDJSON (streaming PDF) and plain JSON (single image) responses.
-      const reader = uploadRes.body?.getReader();
-      if (!reader) throw new Error("Streaming not supported");
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const evt = JSON.parse(line);
-            if (evt.type === "total") setPageCount(evt.total);
-            else if (evt.type === "page") setUploadedCount((n) => n + 1);
-            else if (evt.type === "done") pages = evt.pages;
-            else if (evt.type === "error") throw new Error(evt.detail || "Server error during upload");
-            else if (evt.type === "heartbeat") { /* keep-alive from server, ignore */ }
-            else if (Array.isArray(evt.pages)) pages = evt.pages; // plain JSON {"pages":[...]}
-          } catch (parseErr) {
-            if (parseErr instanceof SyntaxError) { /* ignore malformed lines */ }
-            else throw parseErr; // re-throw real errors (e.g. error event above)
-          }
-        }
+      let pages = await uploadPages(file, authHeader);
+      if (!pages.length) {
+        setError("Server is warming up — retrying upload automatically…");
+        await new Promise((r) => setTimeout(r, 4000));
+        setError("");
+        setUploadedCount(0);
+        pages = await uploadPages(file, authHeader);
       }
-      // Flush remaining buffer (plain JSON response may land in one chunk with no trailing newline)
-      if (buf.trim()) {
-        try {
-          const evt = JSON.parse(buf);
-          if (evt.type === "done") pages = evt.pages;
-          else if (Array.isArray(evt.pages)) pages = evt.pages;
-        } catch { /* ignore */ }
-      }
-      if (!pages.length) throw new Error("No pages returned from upload");
+      if (!pages.length) throw new Error("No pages returned from upload — please try again");
       setPageCount(pages.length);
 
       // Step 2: Start background AI job — returns immediately with job_id
