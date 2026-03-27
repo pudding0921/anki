@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.deps import get_active_user
+from app.core.deps import get_active_user, get_current_user
 from app.database import get_db
 from app.models.models import Card, Deck, Folder, User
 from app.schemas.schemas import TrashResponse, TrashFolderOut, TrashDeckOut, TrashCardOut
@@ -12,6 +12,23 @@ from app.schemas.schemas import TrashResponse, TrashFolderOut, TrashDeckOut, Tra
 router = APIRouter(prefix="/trash", tags=["trash"])
 
 TRASH_DAYS = 30
+_SUPABASE_MARKER = "/storage/v1/object/public/"
+
+
+def _delete_card_images(cards: list) -> None:
+    """Delete Supabase storage images for a list of Card objects."""
+    from app.core.config import settings
+    from app.services.storage import delete_files
+    bucket = settings.SUPABASE_BUCKET
+    marker = f"{_SUPABASE_MARKER}{bucket}/"
+    paths = []
+    for card in cards:
+        if card.image_path and card.image_path.startswith("http"):
+            idx = card.image_path.find(marker)
+            if idx != -1:
+                paths.append(card.image_path[idx + len(marker):])
+    if paths:
+        delete_files(paths)
 
 
 def _days_remaining(deleted_at: datetime) -> int:
@@ -49,7 +66,7 @@ def _purge_expired(db: Session, user_id: int):
 
 @router.get("", response_model=TrashResponse)
 def get_trash(
-    current_user: User = Depends(get_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     _purge_expired(db, current_user.id)
@@ -128,7 +145,7 @@ def get_trash(
 @router.post("/restore/folder/{folder_id}")
 def restore_folder(
     folder_id: int,
-    current_user: User = Depends(get_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     folder = (
@@ -150,7 +167,7 @@ def restore_folder(
 @router.post("/restore/deck/{deck_id}")
 def restore_deck(
     deck_id: int,
-    current_user: User = Depends(get_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     deck = (
@@ -172,7 +189,7 @@ def restore_deck(
 @router.post("/restore/card/{card_id}")
 def restore_card(
     card_id: int,
-    current_user: User = Depends(get_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     card = (
@@ -195,7 +212,7 @@ def restore_card(
 @router.delete("/folder/{folder_id}", status_code=204)
 def delete_folder_forever(
     folder_id: int,
-    current_user: User = Depends(get_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     folder = (
@@ -209,6 +226,14 @@ def delete_folder_forever(
     )
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not in trash")
+    # Delete images for all cards in decks inside this folder
+    cards = (
+        db.query(Card)
+        .join(Deck)
+        .filter(Deck.folder_id == folder_id, Card.image_path != None)
+        .all()
+    )
+    _delete_card_images(cards)
     db.delete(folder)
     db.commit()
 
@@ -216,7 +241,7 @@ def delete_folder_forever(
 @router.delete("/deck/{deck_id}", status_code=204)
 def delete_deck_forever(
     deck_id: int,
-    current_user: User = Depends(get_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     deck = (
@@ -230,6 +255,8 @@ def delete_deck_forever(
     )
     if not deck:
         raise HTTPException(status_code=404, detail="Deck not in trash")
+    cards = db.query(Card).filter(Card.deck_id == deck_id, Card.image_path != None).all()
+    _delete_card_images(cards)
     db.delete(deck)
     db.commit()
 
@@ -237,7 +264,7 @@ def delete_deck_forever(
 @router.delete("/card/{card_id}", status_code=204)
 def delete_card_forever(
     card_id: int,
-    current_user: User = Depends(get_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     card = (
@@ -252,21 +279,24 @@ def delete_card_forever(
     )
     if not card:
         raise HTTPException(status_code=404, detail="Card not in trash")
+    _delete_card_images([card])
     db.delete(card)
     db.commit()
 
 
 @router.delete("/empty", status_code=204)
 def empty_trash(
-    current_user: User = Depends(get_active_user),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    for card in (
+    cards = (
         db.query(Card)
         .join(Deck)
         .filter(Deck.user_id == current_user.id, Card.deleted_at != None)
         .all()
-    ):
+    )
+    _delete_card_images(cards)
+    for card in cards:
         db.delete(card)
     for deck in (
         db.query(Deck)
