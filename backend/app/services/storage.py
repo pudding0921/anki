@@ -31,3 +31,31 @@ def upload_file(file_bytes: bytes, storage_path: str, content_type: str = "image
     except Exception as exc:
         logger.warning("Supabase upload error: %s", exc)
         return None
+
+
+def delete_files(storage_paths: list[str]) -> int:
+    """Delete a batch of files from Supabase Storage by their storage paths.
+    Returns the number of files successfully deleted."""
+    if not storage_paths or not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
+        return 0
+
+    bucket = settings.SUPABASE_BUCKET
+    url = f"{settings.SUPABASE_URL}/storage/v1/object/{bucket}"
+
+    try:
+        response = requests.delete(
+            url,
+            headers={
+                "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={"prefixes": storage_paths},
+            timeout=30,
+        )
+        if response.status_code in (200, 204):
+            return len(storage_paths)
+        logger.warning("Supabase batch delete failed (%s): %s", response.status_code, response.text[:200])
+        return 0
+    except Exception as exc:
+        logger.warning("Supabase delete error: %s", exc)
+        return 0

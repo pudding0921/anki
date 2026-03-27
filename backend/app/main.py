@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -79,7 +80,17 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     os.makedirs(_ABS_UPLOAD_DIR, exist_ok=True)
     _migrate_db()
+
+    from app.services.cleanup import run_cleanup_loop
+    cleanup_task = asyncio.create_task(run_cleanup_loop())
+
     yield
+
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(title="FlowCard", version="0.3.0", lifespan=lifespan)
