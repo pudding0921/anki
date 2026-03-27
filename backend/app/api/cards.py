@@ -22,12 +22,16 @@ def _count_pdf_pages(data: bytes) -> int:
 
 # In-memory job store for background batch-occlusion jobs.
 # Single-instance Render deployment — in-memory is sufficient.
-_batch_jobs: dict = {}  # job_id -> {status, done, total, results, ...}
+_batch_jobs: dict = {}  # job_id -> {status, done, total, user_id, results, ...}
 
 def _cleanup_old_jobs() -> None:
     now = _time.time()
     for jid in [k for k, v in _batch_jobs.items() if v.get("expires_at", 0) < now]:
         del _batch_jobs[jid]
+
+# Modal function handle cache — looked up once, reused across requests.
+# Avoids repeated gRPC calls to Modal's API on every upload.
+_MODAL_FN_CACHE: dict = {}
 
 # Hard cap on simultaneous heavy jobs (PDF render + AI).
 # Each job can use ~50-100 MB; Render Starter = 512 MB total.
@@ -41,6 +45,14 @@ def _get_semaphore() -> asyncio.Semaphore:
     return _PROCESSING_SEMAPHORE
 
 MAX_PDF_PAGES = 200  # soft cap — semaphore protects memory, this just prevents absurd uploads
+
+
+def _get_modal_fn(name: str):
+    """Look up a deployed Modal function by name, caching the handle."""
+    if name not in _MODAL_FN_CACHE:
+        import modal
+        _MODAL_FN_CACHE[name] = modal.Function.lookup("flowcard", name)
+    return _MODAL_FN_CACHE[name]
 
 logger = logging.getLogger(__name__)
 
@@ -184,8 +196,7 @@ async def upload_pages(
     # ── Modal path: offload rendering to serverless containers ───────────────
     if os.environ.get("MODAL_TOKEN_ID"):
         try:
-            import modal
-            render_pdf_pages = modal.Function.lookup("flowcard", "render_pdf_pages")
+            render_pdf_pages = _get_modal_fn("render_pdf_pages")
             loop = asyncio.get_running_loop()
             # Do NOT await here — start the future immediately and return the
             # StreamingResponse so the connection opens right away.
@@ -218,7 +229,10 @@ async def upload_pages(
                         return
 
                     for p in pages:
-                        yield json.dumps({"type": "page", **p}) + "\n"
+                        # Omit pre_zones from per-page events — it can be large
+                        # and the frontend only needs it in the done.pages payload.
+                        slim = {k: v for k, v in p.items() if k != "pre_zones"}
+                        yield json.dumps({"type": "page", **slim}) + "\n"
                     yield json.dumps({"type": "done", "pages": pages}) + "\n"
 
                 except GeneratorExit:
@@ -444,8 +458,7 @@ async def _run_batch_occlusion_job_inner(
         # ── Modal path ────────────────────────────────────────────────────────
         if os.environ.get("MODAL_TOKEN_ID"):
             try:
-                import modal
-                _modal_analyze = modal.Function.lookup("flowcard", "analyze_page")
+                _modal_analyze = _get_modal_fn("analyze_page")
                 pages_with_uid = [{**p, "_user_id": user_id} for p in pages]
 
                 # Pages whose text zones were pre-extracted in render_pdf_pages can be
@@ -653,6 +666,7 @@ async def batch_occlusion(
         "status": "processing",
         "done": 0,
         "total": len(pages),
+        "user_id": current_user.id,
         "expires_at": _time.time() + 7200,  # 2-hour TTL
     }
     _cleanup_old_jobs()
@@ -672,10 +686,12 @@ async def batch_occlusion_status(
     current_user: User = Depends(get_active_user),
 ):
     """Poll for the status of a background batch-occlusion job."""
+    _cleanup_old_jobs()
     job = _batch_jobs.get(job_id)
-    if not job:
+    # Return 404 for both missing and wrong-owner jobs — same response to prevent enumeration
+    if not job or job.get("user_id") != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found or expired")
-    return {k: v for k, v in job.items() if not k.startswith("_")}
+    return {k: v for k, v in job.items() if not k.startswith("_") and k != "user_id"}
 
 
 @router.post("/occlusion", response_model=CardOut)
