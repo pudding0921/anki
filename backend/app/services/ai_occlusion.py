@@ -595,36 +595,30 @@ def _call_gemini_occlusion(prompt: str) -> Optional[str]:
     try:
         import google.generativeai as genai
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            "gemini-2.0-flash",
-            system_instruction=(
-                "You are an Anki flashcard expert. "
-                "You follow instructions exactly and return only valid JSON arrays. "
-                "You return short keywords and key phrases (1-4 words) that students must memorise — never full sentences."
-            ),
-        )
+        # Use gemini-1.5-flash — proven stable in the vision pipeline.
+        # gemini-2.0-flash requires newer SDK versions not guaranteed in Modal.
+        model = genai.GenerativeModel("gemini-1.5-flash")
         last_err = None
         for attempt in range(3):
             try:
                 response = model.generate_content(
                     prompt,
-                    generation_config={"temperature": 0.0, "max_output_tokens": 300},
+                    generation_config={"temperature": 0.0, "max_output_tokens": 512},
                 )
                 return response.text or None
             except Exception as e:
                 last_err = e
                 err_str = str(e).lower()
-                # Retry on rate limit (429) with exponential backoff
                 if "429" in err_str or "quota" in err_str or "rate" in err_str:
                     wait = 2 ** attempt  # 1s, 2s, 4s
                     logger.warning(f"Gemini rate limit hit (attempt {attempt+1}/3), retrying in {wait}s")
                     _time.sleep(wait)
                     continue
-                break  # Non-retryable error
-        logger.warning(f"Gemini 2.0 Flash occlusion call failed: {last_err}")
+                break
+        logger.warning(f"Gemini occlusion call failed: {last_err}")
         return None
     except Exception as e:
-        logger.warning(f"Gemini 2.0 Flash occlusion setup failed: {e}")
+        logger.warning(f"Gemini occlusion setup failed: {e}")
         return None
 
 
@@ -936,8 +930,37 @@ def _zones_from_text_data(
         logger.info("LLM gave no zones — using formatting fallback")
         zones = _formatting_fallback_from_blocks(blocks, scale, title_max_y)
 
-    # No last-resort word-by-word fallback — it covers too many things
-    # and produces unusable flashcards (every word on screen gets occluded)
+    # Smart last-resort: pick the 3 longest meaningful words from body text.
+    # Longer words are more specific (identifiers, keywords, technical terms).
+    # Avoids covering every word — max 3 zones, skips short filler.
+    if not zones and words:
+        body_words = [w for w in words if w[1] >= title_max_y - 2]
+        _COPYRIGHT_CHARS = frozenset("©®\xa9\xae")
+        candidates = []
+        seen: set = set()
+        for w in body_words:
+            text = w[4].strip(".,;:!?()\"'[]{}| \t")
+            norm = text.lower().strip(".,;:!?()'\"")
+            if (len(text) >= 4
+                    and norm not in _FILLER_WORDS
+                    and norm not in title_word_set
+                    and not norm.isnumeric()
+                    and norm not in seen
+                    and not text[0] in _COPYRIGHT_CHARS):
+                seen.add(norm)
+                candidates.append((len(text), w, text))
+        # Sort longest first (most specific / most likely to be a key term)
+        candidates.sort(reverse=True)
+        for _, w, text in candidates[:3]:
+            zones.append({
+                "label": text,
+                "x": round(w[0] * scale, 1),
+                "y": round(w[1] * scale, 1),
+                "width": round((w[2] - w[0]) * scale, 1),
+                "height": round((w[3] - w[1]) * scale, 1),
+            })
+        if zones:
+            logger.info(f"Last-resort: {len(zones)} zone(s) from longest body words")
 
     return zones
 
