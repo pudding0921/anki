@@ -16,72 +16,77 @@ logger = logging.getLogger(__name__)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-KEY_TERMS_PROMPT = """Extract 3–5 key terms from this university slide for Anki image-occlusion flashcards.
-A student will study by uncovering hidden words — pick the specific scientific names, values, and vocabulary they must memorise.
+KEY_TERMS_PROMPT = """You are a professor writing a fill-in-the-blank exam from a single university lecture slide.
+Your job: decide which 3–5 words or phrases a student MUST recall to pass an exam on this slide.
+Each answer you pick will become a blank that the student uncovers during Anki study.
+
+Ask yourself: "If I blanked out this word, would a student need to know it for an exam?" If yes — pick it.
 
 OUTPUT FORMAT: a JSON array of strings, nothing else.
-SLIDE TITLE — never include any of these words: {title}
+SLIDE TITLE — never blank any of these words: {title}
 
-RULES (3 only):
-1. Return 3–5 terms. Always find at least 3 if the slide has any educational content.
-2. Each term is 1–4 words — the scientific noun/value/keyword, NOT connecting or explanatory words.
-3. Never include: slide title words, full sentences, pure filler (is/are/the/a/an/that/which), copyright or publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, ©).
+RULES:
+1. Return 3–5 blanks. Always find at least 3 if the slide has any educational content.
+2. Each blank is 1–4 words — the specific answer, NOT a connecting or filler word.
+3. Never include: slide title words, full sentences, filler words (is/are/the/a/an/that/which), publisher names (Pearson, McGraw, Elsevier, Wiley, ©).
 
-WHAT TO EXTRACT — examples by subject:
+WHAT WOULD APPEAR ON AN EXAM — examples by subject:
 
 Pharmacology:
   "Metformin inhibits hepatic glucose production via AMPK activation"
+  Exam questions: "_____ inhibits hepatic glucose production" / "Metformin works via _____ activation"
   → ["Metformin", "hepatic glucose production", "AMPK"]
+
   "Beta-blockers competitively antagonise catecholamines at beta-1 receptors"
-  → ["Beta-blockers", "catecholamines", "beta-1 receptors"]
+  Exam: "Beta-blockers antagonise _____ at _____ receptors"
+  → ["catecholamines", "beta-1 receptors"]
 
 Anatomy / Physiology:
   "The sinoatrial node sets heart rate at 60–100 bpm; Purkinje fibers conduct impulses"
+  Exam: "The _____ sets heart rate" / "Normal heart rate is _____ bpm"
   → ["sinoatrial node", "60–100 bpm", "Purkinje fibers"]
+
   "Aldosterone acts on the collecting duct to increase Na+ reabsorption"
+  Exam: "_____ increases Na+ reabsorption in the _____"
   → ["Aldosterone", "collecting duct", "Na+ reabsorption"]
 
 Biochemistry / Pathways:
   "Pyruvate decarboxylase converts pyruvate to acetyl-CoA in the mitochondrial matrix"
+  Exam: "_____ converts pyruvate to _____ in the _____"
   → ["Pyruvate decarboxylase", "acetyl-CoA", "mitochondrial matrix"]
-  "NADH donates electrons to Complex I of the electron transport chain"
-  → ["NADH", "Complex I", "electron transport chain"]
 
 Lab values / Clinical:
   "HbA1c > 6.5% diagnoses type 2 diabetes; normal fasting glucose is 70–100 mg/dL"
+  Exam: "HbA1c > _____% diagnoses _____; normal fasting glucose is _____"
   → ["HbA1c > 6.5%", "type 2 diabetes", "70–100 mg/dL"]
-  "CD4 count < 200 cells/uL defines AIDS; viral load > 100,000 requires treatment"
-  → ["CD4 < 200", "AIDS", "viral load"]
 
 Microbiology / Pathology:
   "Staphylococcus aureus produces protein A, binding the Fc region of IgG to evade immunity"
+  Exam: "_____ produces protein A" / "Protein A binds the _____ region of IgG"
   → ["Staphylococcus aureus", "protein A", "IgG Fc"]
+
   "Reed-Sternberg cells are the hallmark of Hodgkin lymphoma, derived from B cells"
+  Exam: "_____ cells are the hallmark of _____"
   → ["Reed-Sternberg cells", "Hodgkin lymphoma"]
 
 Genetics / Molecular biology:
   "BRCA1 and BRCA2 are tumour suppressor genes; mutations increase breast/ovarian cancer risk"
+  Exam: "_____ and _____ are tumour suppressor genes"
   → ["BRCA1", "BRCA2", "tumour suppressor"]
-  "mRNA is translated 5' to 3' by ribosomes; start codon AUG codes for methionine"
-  → ["5' to 3'", "AUG", "methionine"]
-
-Chemistry:
-  "Carboxylic acids contain a carboxyl group (-COOH); SN2 reactions invert stereochemistry"
-  → ["carboxyl group", "-COOH", "SN2", "stereochemistry"]
 
 Definition slides — "Term: definition or explanation":
   "Glycolysis: anaerobic breakdown of glucose producing ATP and pyruvate"
-  → ["Glycolysis", "ATP", "pyruvate"]         ← return the TERM plus key science nouns from the definition
-  "Osmosis: net movement of water across a semipermeable membrane down its concentration gradient"
-  → ["Osmosis", "semipermeable membrane", "concentration gradient"]
+  Exam: "Define _____" / "Glycolysis produces _____ and _____"
+  → ["Glycolysis", "ATP", "pyruvate"]
+
   "Apoptosis: programmed cell death triggered by caspase activation"
+  Exam: "Apoptosis is triggered by _____"
   → ["Apoptosis", "caspase activation"]
 
 CS / Programming:
   "enum defines a named set of integer constants — e.g. enum Day {{ MONDAY, TUESDAY }}"
-  → ["enum", "integer constants"]             ← language keywords only; NEVER example names (MONDAY etc.)
-  "Inheritance allows a subclass to reuse methods and fields from its superclass"
-  → ["Inheritance", "subclass", "superclass"]
+  Exam: "_____ defines a named set of _____"
+  → ["enum", "integer constants"]
 {checklist_section}
 SLIDE TEXT:
 {body_text}
@@ -127,8 +132,9 @@ VISION_PROMPT = (
     'Return ONLY valid JSON, no markdown:\n[{"label":"term","x":0.1,"y":0.2,"w":0.05,"h":0.03}]'
 )
 
-ANKIFLOW_VISION_PROMPT = """You are building Anki image-occlusion flashcards from a university slide image.
-Identify and box 1–10 key terms, values, or diagram labels that a student must memorise.
+ANKIFLOW_VISION_PROMPT = """You are a professor writing a fill-in-the-blank exam from a university slide image.
+Box 1–10 words or phrases that a student MUST recall to pass an exam on this slide.
+Each box becomes a blank the student fills in. Ask: "Would this appear as a blank on my exam?"
 
 OUTPUT FORMAT (strict JSON, no markdown):
 {
@@ -141,31 +147,31 @@ Bounding box: [ymin, xmin, ymax, xmax] on a 0–1000 scale. Box TIGHTLY around t
 
 STEP 1 — Find the title (largest/boldest text at top). Set it as master_topic. NEVER box it.
 
-STEP 2 — Box in priority order:
+STEP 2 — Box exam answers in priority order:
 
-PRIORITY 1 — Diagram / image labels (box these first if any diagram is present):
-  • Every label connected to a structure by an arrow or callout line
+PRIORITY 1 — Diagram labels (the most exam-tested content):
+  • Every structure name connected to an arrow or callout line
   • Every anatomical part name (aorta, mitral valve, hippocampus, Bowman's capsule)
   • Every cell/tissue type label (hepatocyte, goblet cell, Purkinje fiber)
-  • Every pathological finding (Reed-Sternberg cells, Mallory bodies, Lewy bodies)
-  • Numbered/lettered labels identifying diagram components
+  • Every pathological finding labelled on the image (Reed-Sternberg cells, Lewy bodies)
+  Exam: "Label the structure indicated by arrow A" → box that structure's name
   Example: heart diagram → box "left ventricle", "chordae tendineae", "aortic valve"
-  Example: brain MRI labels → box "hippocampus", "amygdala", "corpus callosum"
+  Example: nephron diagram → box "Bowman's capsule", "loop of Henle", "collecting duct"
 
-PRIORITY 2 — Scientific key terms in bullet points:
-  • Drug names, drug classes: "Metformin", "Beta-blockers", "ACE inhibitors"
-  • Enzyme/protein/gene names: "Pyruvate decarboxylase", "BRCA1", "p53"
+PRIORITY 2 — Testable facts in bullet points:
+  • Drug names: "Metformin", "Beta-blockers", "ACE inhibitors", "warfarin"
+  • Exact values & thresholds: "HbA1c > 6.5%", "120/80 mmHg", "CD4 < 200", "70–100 mg/dL"
+  • Enzyme/gene/protein names: "Pyruvate decarboxylase", "BRCA1", "p53", "AMPK"
   • Disease/pathogen names: "Staphylococcus aureus", "Hodgkin lymphoma", "type 2 diabetes"
-  • Numerical values and thresholds: "HbA1c > 6.5%", "120/80 mmHg", "CD4 < 200"
   • Biochemical compounds: "acetyl-CoA", "ATP", "NADH", "Na+"
-  Example: "Metformin inhibits hepatic glucose production via AMPK" → box "Metformin", "AMPK"
-  Example: "HbA1c > 6.5% confirms type 2 diabetes" → box "HbA1c > 6.5%", "type 2 diabetes"
-  Example: "photosynthesis occurs in the chloroplast" → box "photosynthesis", "chloroplast"
+  Exam: "_____ inhibits hepatic glucose production" → box "Metformin"
+  Exam: "HbA1c > _____ diagnoses diabetes" → box "6.5%"
+  Exam: "Name the enzyme that converts pyruvate to acetyl-CoA" → box "Pyruvate decarboxylase"
 
 NEVER box:
   • The slide title or any word in it
   • Full sentences (more than 4 words forming a complete thought)
-  • Pure filler words: is, are, was, the, a, an, and, or, but, that, which
+  • Pure filler: is, are, was, the, a, an, and, or, but, that, which
   • Copyright, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, ©), page numbers, footnotes"""
 
 

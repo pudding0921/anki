@@ -257,7 +257,7 @@ export default function OcclusionPage() {
   }
 
   async function saveAllAndFinish() {
-    setStep("done");
+    router.push("/dashboard");
   }
 
   return (
@@ -446,10 +446,12 @@ export default function OcclusionPage() {
         {/* ── Reviewing ── */}
         {step === "reviewing" && reviewCards.length > 0 && (
           <div className="flex flex-col gap-6">
-            <div className="flex flex-col gap-1">
-              <h2 className="font-semibold text-lg">Review &amp; edit zones</h2>
-              <p className="text-sm text-muted-foreground">
-                {reviewCards.length} card{reviewCards.length !== 1 ? "s" : ""} generated. Edit zones on any slide, then hit <span className="font-medium text-foreground">Save &amp; Finish</span> in the top bar.
+            <div className="border border-emerald-500/30 bg-emerald-500/10 rounded-xl px-5 py-4 flex flex-col gap-1">
+              <p className="font-semibold text-emerald-400">
+                {reviewCards.length} card{reviewCards.length !== 1 ? "s" : ""} generated from {pageCount} slide{pageCount !== 1 ? "s" : ""}
+              </p>
+              <p className="text-sm text-emerald-400/80">
+                Edit zones on any slide below, then hit <span className="font-medium text-emerald-300">Save &amp; Finish</span> to go to your dashboard.
               </p>
             </div>
 
@@ -496,68 +498,17 @@ export default function OcclusionPage() {
           </div>
         )}
 
-        {/* ── Done ── */}
+        {/* ── Done (fallback: 0 cards created) ── */}
         {step === "done" && (
           <div className="flex flex-col gap-6">
-            <div className="border rounded-xl p-6 flex flex-col gap-2 bg-emerald-500/10 border-emerald-500/30">
-              <p className="font-bold text-xl text-emerald-400">
-                {results.created} card{results.created !== 1 ? "s" : ""} created!
-              </p>
-              <p className="text-sm text-emerald-400/80">
-                {results.skipped > 0 && `${results.skipped} slide${results.skipped !== 1 ? "s" : ""} skipped (no readable content).`}
+            <div className="border rounded-xl p-6 flex flex-col gap-2 bg-muted/40 border-border">
+              <p className="font-semibold text-lg">No cards could be generated</p>
+              <p className="text-sm text-muted-foreground">
+                The slides may not contain readable text. Try uploading a different file or go to your dashboard to create cards manually.
               </p>
             </div>
-
-            <div className="flex flex-col gap-2">
-              {results.results.map((r) => (
-                <div
-                  key={r.page}
-                  className={`flex items-center justify-between border rounded-lg px-4 py-2 text-sm ${
-                    r.status === "created" ? "border-emerald-500/30 bg-emerald-500/10" : "border-border bg-muted/30"
-                  }`}
-                >
-                  <span className="text-muted-foreground">Page {r.page}</span>
-                  {r.status === "created" ? (
-                    <span className="text-emerald-400 font-medium">
-                      ✓ {r.zones} zone{r.zones !== 1 ? "s" : ""}
-                      {r.diagrams != null && r.diagrams > 0 && ` + ${r.diagrams} diagram card${r.diagrams !== 1 ? "s" : ""}`}
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground text-xs">{r.reason ?? "skipped"}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-
             <div className="flex gap-3 flex-wrap">
               <Button onClick={() => router.push("/dashboard")}>Go to dashboard</Button>
-              {results.created > 0 && results.deckId && (
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    const token = localStorage.getItem("token");
-                    const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-                    for (let attempt = 0; attempt < 3; attempt++) {
-                      if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
-                      try {
-                        const deckRes = await fetch(`${API_URL}/api/decks/${results.deckId}`, { headers: authHeader });
-                        if (!deckRes.ok) continue;
-                        const deck = await deckRes.json();
-                        const cards: ReviewCard[] = (deck.cards ?? []).filter((c: ReviewCard & { card_type: string }) => c.card_type === "occlusion");
-                        if (cards.length > 0) {
-                          setReviewCards(cards);
-                          setSavedCardIds(new Set());
-                          setStep("reviewing");
-                          return;
-                        }
-                      } catch { /* retry */ }
-                    }
-                    setError("Could not load cards for review — please go to Dashboard and edit the deck instead.");
-                  }}
-                >
-                  Review &amp; edit zones
-                </Button>
-              )}
               <Button
                 variant="outline"
                 onClick={() => {
@@ -571,7 +522,7 @@ export default function OcclusionPage() {
                   setSavedCardIds(new Set());
                 }}
               >
-                Upload more slides
+                Upload different slides
               </Button>
             </div>
           </div>
