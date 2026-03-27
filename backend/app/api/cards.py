@@ -83,7 +83,7 @@ class ZonesReplaceRequest(BaseModel):
     zones: List[OcclusionZoneCreate]
 from app.services.llm import generate_flashcards
 from app.services.ocr import extract_text
-from app.services.ai_occlusion import zones_for_pdf_page, zones_for_image, diagram_cards_for_pdf_page
+from app.services.ai_occlusion import zones_for_pdf_page, zones_for_image
 from app.services.storage import upload_file as storage_upload
 
 router = APIRouter(prefix="/cards", tags=["cards"])
@@ -391,8 +391,6 @@ async def _run_batch_occlusion_job_inner(
             render_scale = float(page.get("render_scale", 2.0))
 
             zones: list = []
-            diagram_specs: list = []
-
             if source_pdf:
                 abs_pdf = _resolve_upload_path(source_pdf)
                 try:
@@ -400,10 +398,6 @@ async def _run_batch_occlusion_job_inner(
                     doc = fitz.open(abs_pdf)
                     fitz_page = doc[page_num - 1]
                     zones = zones_for_pdf_page(fitz_page, scale=render_scale, checklist_text=checklist_text)
-                    try:
-                        diagram_specs = diagram_cards_for_pdf_page(fitz_page)
-                    except Exception as e:
-                        logger.warning(f"Diagram detection failed on page {page_num}: {e}")
                     doc.close()
                 except Exception as e:
                     logger.warning(f"PDF processing failed for page {page_num}: {e}")
@@ -434,7 +428,7 @@ async def _run_batch_occlusion_job_inner(
                             "zones": [], "diagram_specs": []}
 
             return {"page": page_num, "image_path": image_path, "img_w": img_w,
-                    "img_h": img_h, "zones": zones, "diagram_specs": diagram_specs}
+                    "img_h": img_h, "zones": zones, "diagram_specs": []}
 
         # ── Helper: write one page result to DB (used by the Modal path below) ──
         def _write_page(db_session, p_num, img_path, iw, ih, zones, diag_specs):

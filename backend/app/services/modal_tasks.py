@@ -181,7 +181,6 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
     from app.services.ai_occlusion import (
         zones_for_pdf_page,
         zones_for_image,
-        diagram_cards_for_pdf_page,
     )
     from app.services.storage import upload_file as _upload
 
@@ -195,7 +194,6 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
     pre_zones = page.get("pre_zones")  # list or None
 
     zones: list = []
-    diagram_specs: list = []
 
     if pre_zones is not None:
         # Text zones already extracted during rendering — no PDF download needed.
@@ -213,24 +211,6 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
             doc = fitz.open(pdf_path)
             fitz_page = doc[page_num - 1]
             zones = zones_for_pdf_page(fitz_page, scale=render_scale, checklist_text=checklist_text)
-            try:
-                raw_diagrams = diagram_cards_for_pdf_page(fitz_page)
-                for spec in raw_diagrams:
-                    ext = spec.get("ext", "png")
-                    if ext not in ("png", "jpg", "jpeg"):
-                        ext = "png"
-                    ct = "image/jpeg" if ext in ("jpg", "jpeg") else "image/png"
-                    diag_key = f"{user_id}/{uuid.uuid4()}.{ext}"
-                    diag_url = _upload(spec["image_bytes"], diag_key, ct)
-                    if diag_url:
-                        diagram_specs.append({
-                            "image_path": diag_url,
-                            "width": spec["width"],
-                            "height": spec["height"],
-                            "zones": spec["zones"],
-                        })
-            except Exception as e:
-                logger.warning(f"Diagram detection failed p{page_num}: {e}")
             doc.close()
             os.unlink(pdf_path)
         except Exception as e:
@@ -252,5 +232,5 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
         "img_w": img_w,
         "img_h": img_h,
         "zones": zones,
-        "diagram_specs": diagram_specs,
+        "diagram_specs": [],
     }

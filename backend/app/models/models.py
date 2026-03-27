@@ -13,6 +13,12 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Email verification — False for new registrations until email is confirmed.
+    # Migration sets True for all existing users so they are not locked out.
+    is_verified = Column(Boolean, default=False, nullable=False)
+    # Account active flag — False suspends login without deleting the account.
+    is_active = Column(Boolean, default=True, nullable=False)
+
     # Stripe subscription
     stripe_customer_id = Column(String, nullable=True)
     subscription_status = Column(String, default="free")   # free | active | canceled
@@ -115,6 +121,28 @@ class InviteCode(Base):
     used_by_email = Column(String, nullable=True)
     used_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # Store the SHA-256 hash of the raw token — never the token itself
+    token_hash = Column(String, unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class EmailVerificationToken(Base):
+    __tablename__ = "email_verification_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_hash = Column(String, unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class ContactMessage(Base):

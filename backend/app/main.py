@@ -57,6 +57,9 @@ def _migrate_db():
         "ALTER TABLE users ADD COLUMN subscription_status VARCHAR DEFAULT 'free'",
         "ALTER TABLE users ADD COLUMN subscription_plan VARCHAR",
         "ALTER TABLE users ADD COLUMN subscription_end TIMESTAMP",
+        # Security columns — existing users default to verified/active so they aren't locked out
+        "ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT TRUE",
+        "ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT TRUE",
     ]
     _mig_logger = logging.getLogger(__name__ + ".migrate")
     with SessionLocal() as session:

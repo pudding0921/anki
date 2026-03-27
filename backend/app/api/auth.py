@@ -1,8 +1,11 @@
 import asyncio
+import hashlib
 import logging
-from datetime import datetime, timezone
+import secrets
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -10,7 +13,7 @@ from app.core.deps import get_current_user
 from app.core.limiter import limiter
 from app.core.security import create_access_token, hash_password, verify_password
 from app.database import get_db
-from app.models.models import InviteCode, User
+from app.models.models import EmailVerificationToken, InviteCode, PasswordResetToken, User
 from app.schemas.schemas import ChangeEmailRequest, ChangePasswordRequest, Token, UserLogin, UserOut, UserRegister
 
 logger = logging.getLogger(__name__)
@@ -79,8 +82,18 @@ async def register(request: Request, payload: UserRegister, db: Session = Depend
     elif payload.stripe_session_id:
         _link_stripe_session(user, payload.stripe_session_id)
 
-    db.commit()
-    db.refresh(user)
+    # Send verification email (non-blocking — user is created regardless)
+    try:
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        expires = datetime.now(timezone.utc) + timedelta(hours=settings.EMAIL_VERIFY_EXPIRE_HOURS)
+        db.add(EmailVerificationToken(user_id=user.id, token_hash=token_hash, expires_at=expires))
+        db.commit()
+        from app.services.email import send_verification_email
+        send_verification_email(user.email, raw_token, settings.FRONTEND_URL)
+    except Exception as exc:
+        logger.warning("Could not send verification email to %s: %s", payload.email, exc)
+
     return user
 
 
@@ -95,6 +108,13 @@ async def login(request: Request, payload: UserLogin, db: Session = Depends(get_
     valid = await loop.run_in_executor(None, verify_password, payload.password, user.hashed_password)
     if not valid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account suspended")
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email before logging in. Check your inbox for the verification link.",
+        )
     token = create_access_token(subject=user.email)
     return {"access_token": token, "token_type": "bearer"}
 
@@ -130,3 +150,119 @@ async def change_password(payload: ChangePasswordRequest, current_user: User = D
     current_user.hashed_password = hashed
     db.commit()
     return {"ok": True}
+
+
+# ── Email verification ────────────────────────────────────────────────────────
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+@router.post("/verify-email")
+@limiter.limit("10/minute")
+def verify_email(request: Request, payload: VerifyEmailRequest, db: Session = Depends(get_db)):
+    token_hash = hashlib.sha256(payload.token.encode()).hexdigest()
+    record = (
+        db.query(EmailVerificationToken)
+        .filter(EmailVerificationToken.token_hash == token_hash)
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification link")
+    now = datetime.now(timezone.utc)
+    expires = record.expires_at if record.expires_at.tzinfo else record.expires_at.replace(tzinfo=timezone.utc)
+    if expires < now:
+        db.delete(record)
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification link has expired. Request a new one.")
+    user = db.query(User).filter(User.id == record.user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid verification link")
+    user.is_verified = True
+    db.delete(record)
+    db.commit()
+    return {"ok": True, "message": "Email verified. You can now log in."}
+
+
+@router.post("/resend-verification")
+@limiter.limit("3/minute")
+def resend_verification(request: Request, payload: UserLogin, db: Session = Depends(get_db)):
+    """Resend verification email. Requires email + password to prevent abuse."""
+    user = db.query(User).filter(User.email == payload.email).first()
+    # Always return the same response to prevent user enumeration
+    generic_ok = {"ok": True, "message": "If that account exists and is unverified, a new link has been sent."}
+    if not user or user.is_verified:
+        return generic_ok
+    if not verify_password(payload.password, user.hashed_password):
+        return generic_ok
+    # Delete old tokens for this user
+    db.query(EmailVerificationToken).filter(EmailVerificationToken.user_id == user.id).delete()
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    expires = datetime.now(timezone.utc) + timedelta(hours=settings.EMAIL_VERIFY_EXPIRE_HOURS)
+    db.add(EmailVerificationToken(user_id=user.id, token_hash=token_hash, expires_at=expires))
+    db.commit()
+    from app.services.email import send_verification_email
+    send_verification_email(user.email, raw_token, settings.FRONTEND_URL)
+    return generic_ok
+
+
+# ── Password reset ────────────────────────────────────────────────────────────
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+@router.post("/forgot-password")
+@limiter.limit("5/minute")
+async def forgot_password(request: Request, payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
+    """Send a password reset email. Always returns 200 to prevent user enumeration."""
+    user = db.query(User).filter(User.email == payload.email).first()
+    if user and user.is_active:
+        # Invalidate any existing reset tokens for this user
+        db.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used == False,
+        ).delete()
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        expires = datetime.now(timezone.utc) + timedelta(minutes=settings.PASSWORD_RESET_EXPIRE_MINUTES)
+        db.add(PasswordResetToken(user_id=user.id, token_hash=token_hash, expires_at=expires))
+        db.commit()
+        from app.services.email import send_password_reset_email
+        send_password_reset_email(user.email, raw_token, settings.FRONTEND_URL)
+    return {"ok": True, "message": "If that email is registered, a reset link has been sent."}
+
+
+@router.post("/reset-password")
+@limiter.limit("10/minute")
+async def reset_password(request: Request, payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    token_hash = hashlib.sha256(payload.token.encode()).hexdigest()
+    record = (
+        db.query(PasswordResetToken)
+        .filter(PasswordResetToken.token_hash == token_hash, PasswordResetToken.used == False)
+        .first()
+    )
+    if not record:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link")
+    now = datetime.now(timezone.utc)
+    expires = record.expires_at if record.expires_at.tzinfo else record.expires_at.replace(tzinfo=timezone.utc)
+    if expires < now:
+        db.delete(record)
+        db.commit()
+        raise HTTPException(status_code=400, detail="Reset link has expired. Request a new one.")
+    user = db.query(User).filter(User.id == record.user_id).first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid reset link")
+    loop = asyncio.get_running_loop()
+    user.hashed_password = await loop.run_in_executor(None, hash_password, payload.new_password)
+    record.used = True
+    db.commit()
+    return {"ok": True, "message": "Password updated. You can now log in."}

@@ -9,7 +9,9 @@ _ENV_FILE = str(_BACKEND_DIR / ".env")
 class Settings(BaseSettings):
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
+    PASSWORD_RESET_EXPIRE_MINUTES: int = 60  # 1 hour
+    EMAIL_VERIFY_EXPIRE_HOURS: int = 48  # 2 days
     DATABASE_URL: str = f"sqlite:///{_BACKEND_DIR}/flowcard.db"
 
     # Stripe
