@@ -82,9 +82,21 @@ export default function OcclusionPage() {
   }, []);
 
   async function pollJob(jobId: string, authHeader: Record<string, string>) {
+    let networkErrors = 0;
     while (true) {
       await new Promise((r) => setTimeout(r, 1500));
-      const statusRes = await fetch(`${API_URL}/api/cards/batch-occlusion/status/${jobId}`, { headers: authHeader });
+      let statusRes: Response;
+      try {
+        statusRes = await fetch(`${API_URL}/api/cards/batch-occlusion/status/${jobId}`, { headers: authHeader });
+      } catch {
+        // Network error — server may be briefly restarting. Retry up to 4 times
+        // with exponential backoff before giving up.
+        networkErrors++;
+        if (networkErrors >= 4) throw new Error("Lost connection to server — please check your internet and try again.");
+        await new Promise((r) => setTimeout(r, 3000 * networkErrors));
+        continue;
+      }
+      networkErrors = 0;
       if (!statusRes.ok) {
         if (statusRes.status === 404) throw new Error("Job expired — please re-upload your slides.");
         throw new Error("Failed to check job status");
@@ -165,8 +177,13 @@ export default function OcclusionPage() {
             if (evt.type === "total") setPageCount(evt.total);
             else if (evt.type === "page") setUploadedCount((n) => n + 1);
             else if (evt.type === "done") pages = evt.pages;
+            else if (evt.type === "error") throw new Error(evt.detail || "Server error during upload");
+            else if (evt.type === "heartbeat") { /* keep-alive from server, ignore */ }
             else if (Array.isArray(evt.pages)) pages = evt.pages; // plain JSON {"pages":[...]}
-          } catch { /* ignore malformed lines */ }
+          } catch (parseErr) {
+            if (parseErr instanceof SyntaxError) { /* ignore malformed lines */ }
+            else throw parseErr; // re-throw real errors (e.g. error event above)
+          }
         }
       }
       // Flush remaining buffer (plain JSON response may land in one chunk with no trailing newline)

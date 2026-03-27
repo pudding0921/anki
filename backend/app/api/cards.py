@@ -186,12 +186,28 @@ async def upload_pages(
         try:
             from app.services.modal_tasks import render_pdf_pages
             loop = asyncio.get_running_loop()
-            pages = await loop.run_in_executor(
+            # Do NOT await here — start the future immediately and return the
+            # StreamingResponse so the connection opens right away.
+            # render_pdf_pages.remote can take 30-120s for large PDFs; awaiting
+            # it before streaming would leave the connection idle long enough for
+            # Render's 30-second proxy timeout to kill it ("Failed to fetch").
+            modal_future = loop.run_in_executor(
                 None, render_pdf_pages.remote, content, current_user.id
             )
-            del content
+            del content  # executor holds the ref; free local name
 
             async def stream_modal_pages():
+                # Send a heartbeat every 5 s while Modal is working.
+                # This keeps the HTTP connection alive through Render's proxy.
+                while not modal_future.done():
+                    yield json.dumps({"type": "heartbeat"}) + "\n"
+                    await asyncio.sleep(5)
+                try:
+                    pages = modal_future.result()
+                except Exception as exc:
+                    logger.warning(f"Modal render failed: {exc}")
+                    yield json.dumps({"type": "error", "detail": "PDF rendering failed — please try again"}) + "\n"
+                    return
                 yield json.dumps({"type": "total", "total": len(pages)}) + "\n"
                 for p in pages:
                     yield json.dumps({"type": "page", **p}) + "\n"
@@ -264,13 +280,22 @@ async def _run_batch_occlusion_job(
     user_id: int,
 ) -> None:
     """Background task: processes all pages and writes cards to DB independently of the HTTP request."""
-    if os.environ.get("MODAL_TOKEN_ID"):
-        # Modal does all heavy work in isolated containers — Render just coordinates, no memory pressure
-        await _run_batch_occlusion_job_inner(job_id, pages, deck_name, user_dir, checklist_text, user_id)
-    else:
-        # Local fallback: semaphore caps RAM usage (each job ~50-100 MB on Render's 512 MB)
-        async with _get_semaphore():
+    try:
+        if os.environ.get("MODAL_TOKEN_ID"):
+            # Modal does all heavy work in isolated containers — Render just coordinates, no memory pressure
             await _run_batch_occlusion_job_inner(job_id, pages, deck_name, user_dir, checklist_text, user_id)
+        else:
+            # Local fallback: semaphore caps RAM usage (each job ~50-100 MB on Render's 512 MB)
+            async with _get_semaphore():
+                await _run_batch_occlusion_job_inner(job_id, pages, deck_name, user_dir, checklist_text, user_id)
+    except Exception as exc:
+        # Catch anything _run_batch_occlusion_job_inner didn't handle (e.g. semaphore errors,
+        # import failures) so the job status is always set — never stuck on "processing".
+        logger.error(f"Job {job_id} top-level failure: {exc}")
+        job = _batch_jobs.get(job_id)
+        if job and job.get("status") != "done":
+            job["status"] = "error"
+            job["error"] = str(exc)
 
 
 async def _run_batch_occlusion_job_inner(
