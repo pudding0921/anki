@@ -16,9 +16,30 @@ logger = logging.getLogger(__name__)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards for university students (biology, chemistry, anatomy, physiology, pharmacology, biochemistry, microbiology, genetics, pathology, computer science, and other subjects). Your job is to extract every keyword, key phrase, or vocabulary term a student MUST memorise from the slide body text below. Return only those terms, nothing else.
+KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards for university students (biology, chemistry, anatomy, physiology, pharmacology, biochemistry, microbiology, genetics, pathology, computer science, and other subjects). Your job is to extract 3–5 keywords or vocabulary terms a student MUST memorise from the slide body text below. Return only those terms, nothing else.
 
 NEVER OCCLUDE THE SLIDE TITLE: {title}
+
+══════════════════════════════════════════════════════
+  SECTION DIVIDER SLIDES — RETURN [] IMMEDIATELY
+══════════════════════════════════════════════════════
+If the body text is a short subtitle with no bullet points, no colons, no definitions,
+and no facts (e.g. "11.2 Combining Data into Structures" or "Chapter 5: Overview"),
+return []. These are navigation slides — nothing to memorise.
+
+══════════════════════════════════════════════════════
+  TERM vs DEFINITION — CRITICAL RULE
+══════════════════════════════════════════════════════
+For "Term: definition" patterns → ONLY return the TERM. NEVER return words from the definition/explanation.
+The definition is the question context; the term is the answer the student must recall.
+
+  "Abstraction: a definition that captures general characteristics without details"
+  ✓ Return: "Abstraction"          ← ONLY the vocabulary term
+  ✗ Never:  "a definition that captures", "general characteristics", "without details"
+
+  "Data Type: a set of values and operations defined on those values"
+  ✓ Return: "Data Type"            ← ONLY the vocabulary term
+  ✗ Never:  "a set of values", "operations defined"
 
 ══════════════════════════════════════════════════════
   THE FILL-IN-THE-BLANK TEST  (apply before every term)
@@ -43,7 +64,7 @@ R2. NEVER return a full sentence or clause (subject + verb + object together).
     Do NOT start a term with: "the", "a", "an", "that", "which", "does", "do", "not", "and", "or"
 R3. NEVER return the slide title or any word from it.
 R4. ALWAYS return chemical names, drug names, gene names, enzyme names, structure names, values, operators, keywords.
-R5. Return ALL terms students must memorise — no cap. Every vocabulary term counts.
+R5. Return 3–5 terms per slide — quality over quantity. Pick the MOST important terms only.
 R6. Greek letters (alpha, beta, gamma, delta, etc.) ARE valid science terms — include them.
 R7. Chemical formulas and notation (CO2, H2O, Na+, ATP, NADH, ~P, ΔG) ARE valid — always return them.
 R8. NEVER return footer content: copyright notices, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, Springer, Oxford, Cambridge, Saunders, Mosby), "©", "Inc.", "All rights reserved", page numbers, footnotes, watermarks, or any attribution text at the bottom of slides.
@@ -52,10 +73,11 @@ R8. NEVER return footer content: copyright notices, publisher names (Pearson, Mc
   PATTERN GUIDE — science subjects (primary audience)
 ══════════════════════════════════════════════════════
 
-PATTERN 1 — "Term: definition" (biology/biochem definition slide)
+PATTERN 1 — "Term: definition" (biology/biochem/CS definition slide)
   Bullet:   "Glycolysis: anaerobic breakdown of glucose to produce ATP and pyruvate"
-  ✓ Return: "Glycolysis", "ATP", "pyruvate"
-  ✗ Never:  "anaerobic breakdown of glucose to produce ATP and pyruvate"
+  ✓ Return: "Glycolysis"           ← ONLY the term, NOT the definition words
+  Bullet:   "Abstraction: captures general characteristics without details"
+  ✓ Return: "Abstraction"          ← ONLY the term
 
 PATTERN 2 — Drug / molecule + mechanism
   Bullet:   "Metformin inhibits hepatic glucose production via AMPK activation"
@@ -83,7 +105,7 @@ PATTERN 5 — Threshold / lab value / clinical number
 
 PATTERN 6 — Cell type / tissue / organelle
   Bullet:   "Chief cells secrete pepsinogen; parietal cells secrete HCl and intrinsic factor"
-  ✓ Return: "Chief cells", "pepsinogen", "parietal cells", "HCl", "intrinsic factor"
+  ✓ Return: "Chief cells", "pepsinogen", "parietal cells"   ← max 5 total
 
 PATTERN 7 — Genetics / molecular biology
   Bullet:   "BRCA1 and BRCA2 mutations increase risk of breast and ovarian cancer"
@@ -100,8 +122,11 @@ PATTERN 9 — Heading with no testable answer
   ✓ Return: nothing — skip headings with no specific answer to recall
 
 PATTERN 10 — Programming / CS (if slide is CS, not science)
+  Code block:  "struct Student {{ int studentID; string name; double gpa; }};"
+  ✓ Return: "struct"               ← ONLY the language keyword being taught
+  ✗ Never:  "studentID", "name", "gpa", "int", "double" — these are field names, not concepts
   Bullet:   "enum Day {{ MONDAY, TUESDAY, WEDNESDAY }};"
-  ✓ Return: "enum"  ← the keyword being taught, NEVER example names like MONDAY
+  ✓ Return: "enum"                 ← the keyword being taught, NEVER example names like MONDAY
 
 ══════════════════════════════════════════════════════
   QUICK SELF-CHECK before returning each term
@@ -109,9 +134,9 @@ PATTERN 10 — Programming / CS (if slide is CS, not science)
   □ Is it 1–4 words?                                              must be YES
   □ Does it start with a banned filler word (R2)?                 must be NO
   □ If I blank it out, does a readable question remain?           must be YES
-  □ Is it a specific, testable vocabulary term?                   must be YES
-  □ Did I include ALL chemical/drug names, lab values, operators? must be YES
+  □ Is it a specific, testable vocabulary term (not a definition word)?  must be YES
   □ Is it copyright, publisher name, page number, or footer text? must be NO
+  □ Total terms ≤ 5?                                              must be YES
 {checklist_section}
 ════ SLIDE BODY TEXT (title already removed) ════
 {body_text}
@@ -797,8 +822,21 @@ def _zones_from_text_data(
     Used by render_pdf_pages to parallelize LLM calls across pages."""
     zones: List[Dict] = []
 
-    if body_text.strip():
-        key_terms = _ask_llm_for_key_terms(body_text, title_str, checklist_text)
+    # Section-divider detection: short body with no bullets, colons, or facts
+    # (e.g. "11.2 Combining Data into Structures") — nothing to occlude
+    body_stripped = body_text.strip()
+    is_section_divider = (
+        len(body_stripped) < 80
+        and ":" not in body_stripped
+        and "." not in body_stripped
+        and body_stripped.count("\n") < 2
+    )
+    if is_section_divider:
+        logger.info(f"Section divider slide detected — skipping zone generation")
+        return []
+
+    if body_stripped:
+        key_terms = _ask_llm_for_key_terms(body_stripped, title_str, checklist_text)
         key_terms = _post_filter_terms(key_terms, title_word_set, title_str)
         if key_terms:
             zones = _match_terms_to_pdf_words(words, key_terms, scale, title_max_y)
@@ -807,24 +845,8 @@ def _zones_from_text_data(
         logger.info("LLM gave no zones — using formatting fallback")
         zones = _formatting_fallback_from_blocks(blocks, scale, title_max_y)
 
-    if not zones and words:
-        body_words = [w for w in words if w[1] >= title_max_y - 2]
-        seen_labels: set = set()
-        for w in body_words:
-            text = w[4].strip(".,;:!?()\"'[]{}|")
-            norm = text.lower()
-            if (len(text) >= 3 and norm not in _FILLER_WORDS
-                    and not norm.isnumeric() and norm not in seen_labels):
-                seen_labels.add(norm)
-                zones.append({
-                    "label": text,
-                    "x": round(w[0] * scale, 1),
-                    "y": round(w[1] * scale, 1),
-                    "width": round((w[2] - w[0]) * scale, 1),
-                    "height": round((w[3] - w[1]) * scale, 1),
-                })
-        if zones:
-            logger.info(f"Last-resort: created {len(zones)} zone(s) from raw body words")
+    # No last-resort word-by-word fallback — it covers too many things
+    # and produces unusable flashcards (every word on screen gets occluded)
 
     return zones
 
