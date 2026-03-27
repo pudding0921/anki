@@ -16,132 +16,70 @@ logger = logging.getLogger(__name__)
 
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
-KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards for university students (biology, chemistry, anatomy, physiology, pharmacology, biochemistry, microbiology, genetics, pathology, computer science, and other subjects). Your job is to extract 3–5 keywords or vocabulary terms a student MUST memorise from the slide body text below. Return only those terms, nothing else.
+KEY_TERMS_PROMPT = """You are building Anki IMAGE-OCCLUSION flashcards for university students (biology, chemistry, anatomy, physiology, pharmacology, biochemistry, microbiology, genetics, pathology, computer science, and other subjects). Extract 3–5 keywords or vocabulary terms a student MUST memorise from the slide body text. Return only those terms.
 
 NEVER OCCLUDE THE SLIDE TITLE: {title}
 
 ══════════════════════════════════════════════════════
-  SECTION DIVIDER SLIDES — RETURN [] IMMEDIATELY
+  HARD RULES
 ══════════════════════════════════════════════════════
-If the body text is a short subtitle with no bullet points, no colons, no definitions,
-and no facts (e.g. "11.2 Combining Data into Structures" or "Chapter 5: Overview"),
-return []. These are navigation slides — nothing to memorise.
-
-══════════════════════════════════════════════════════
-  TERM vs DEFINITION — CRITICAL RULE
-══════════════════════════════════════════════════════
-For "Term: definition" patterns → ONLY return the TERM. NEVER return words from the definition/explanation.
-The definition is the question context; the term is the answer the student must recall.
-
-  "Abstraction: a definition that captures general characteristics without details"
-  ✓ Return: "Abstraction"          ← ONLY the vocabulary term
-  ✗ Never:  "a definition that captures", "general characteristics", "without details"
-
-  "Data Type: a set of values and operations defined on those values"
-  ✓ Return: "Data Type"            ← ONLY the vocabulary term
-  ✗ Never:  "a set of values", "operations defined"
-
-══════════════════════════════════════════════════════
-  THE FILL-IN-THE-BLANK TEST  (apply before every term)
-══════════════════════════════════════════════════════
-Replace your chosen term with a blank in the original sentence.
-Does the remaining text form a clear question with exactly ONE correct answer?
-
-  PASS ✓  "________ is the anaerobic breakdown of glucose to pyruvate."
-           → you returned "Glycolysis" — student knows what to recall
-  PASS ✓  "Metformin inhibits ________ via AMPK activation."
-           → you returned "hepatic glucose production" — clear question remains
-  FAIL ✗  "________ inhibits ________ via ________ activation."
-           → too many blanks — you chose too many terms from one bullet
-  FAIL ✗  "________________________________________" (sentence becomes empty)
-           → your term was the entire bullet — shorten it
-
-══════════════════════════════════════════════════════
-  ABSOLUTE HARD RULES
-══════════════════════════════════════════════════════
-R1. MAXIMUM 4 WORDS per term. 1–2 words ideal; multi-word science/CS phrases up to 4 words allowed.
-R2. NEVER return a full sentence or clause (subject + verb + object together).
+R1. MAXIMUM 4 WORDS per term. 1–2 words ideal; multi-word science phrases up to 4 words allowed.
+R2. NEVER return a full sentence or clause.
     Do NOT start a term with: "the", "a", "an", "that", "which", "does", "do", "not", "and", "or"
 R3. NEVER return the slide title or any word from it.
-R4. ALWAYS return chemical names, drug names, gene names, enzyme names, structure names, values, operators, keywords.
-R5. Return 3–5 terms per slide — quality over quantity. Pick the MOST important terms only.
-R6. Greek letters (alpha, beta, gamma, delta, etc.) ARE valid science terms — include them.
-R7. Chemical formulas and notation (CO2, H2O, Na+, ATP, NADH, ~P, ΔG) ARE valid — always return them.
-R8. NEVER return footer content: copyright notices, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, Springer, Oxford, Cambridge, Saunders, Mosby), "©", "Inc.", "All rights reserved", page numbers, footnotes, watermarks, or any attribution text at the bottom of slides.
+R4. ALWAYS return chemical names, drug names, gene names, enzyme names, structure names, values, and CS keywords.
+R5. Return 3–5 terms — if the slide has real content, find at least 3 terms. Even simple slides have keywords worth covering.
+R6. Greek letters and chemical formulas (CO2, H2O, ATP, ΔG) are valid terms.
+R7. NEVER return copyright notices, publisher names (Pearson, McGraw, Elsevier, Wiley, Cengage, etc.), "©", page numbers, or footer text.
 
 ══════════════════════════════════════════════════════
-  PATTERN GUIDE — science subjects (primary audience)
+  PATTERN GUIDE
 ══════════════════════════════════════════════════════
 
-PATTERN 1 — "Term: definition" (biology/biochem/CS definition slide)
+PATTERN 1 — "Term: definition" (definition slide)
   Bullet:   "Glycolysis: anaerobic breakdown of glucose to produce ATP and pyruvate"
-  ✓ Return: "Glycolysis"           ← ONLY the term, NOT the definition words
+  ✓ Return: "Glycolysis", "ATP", "pyruvate"   ← term + key vocabulary from the definition
   Bullet:   "Abstraction: captures general characteristics without details"
-  ✓ Return: "Abstraction"          ← ONLY the term
+  ✓ Return: "Abstraction", "general characteristics"
 
 PATTERN 2 — Drug / molecule + mechanism
   Bullet:   "Metformin inhibits hepatic glucose production via AMPK activation"
-  ✓ Return: "Metformin", "AMPK"
-  Bullet:   "Beta-2 agonists cause bronchodilation by relaxing airway smooth muscle"
-  ✓ Return: "Beta-2 agonists", "bronchodilation"
+  ✓ Return: "Metformin", "hepatic glucose production", "AMPK"
 
 PATTERN 3 — Anatomical structure + function
   Bullet:   "The sinoatrial node generates electrical impulses at 60–100 bpm"
   ✓ Return: "sinoatrial node", "60–100 bpm"
-  Bullet:   "Bowman's capsule surrounds the glomerulus and filters blood"
-  ✓ Return: "Bowman's capsule", "glomerulus"
 
 PATTERN 4 — Chemical / reaction
   Bullet:   "Carboxylic acids contain a carboxyl functional group (-COOH)"
   ✓ Return: "carboxyl", "-COOH"
-  Bullet:   "SN2 reaction proceeds with inversion of configuration (Walden inversion)"
-  ✓ Return: "SN2", "inversion of configuration"
 
-PATTERN 5 — Threshold / lab value / clinical number
+PATTERN 5 — Threshold / lab value
   Bullet:   "HbA1c > 6.5% confirms a diagnosis of type 2 diabetes"
   ✓ Return: "HbA1c > 6.5%", "type 2 diabetes"
-  Bullet:   "Normal fasting glucose: 70–100 mg/dL; prediabetes: 100–125 mg/dL"
-  ✓ Return: "70–100 mg/dL", "100–125 mg/dL"
 
 PATTERN 6 — Cell type / tissue / organelle
   Bullet:   "Chief cells secrete pepsinogen; parietal cells secrete HCl and intrinsic factor"
-  ✓ Return: "Chief cells", "pepsinogen", "parietal cells"   ← max 5 total
+  ✓ Return: "Chief cells", "pepsinogen", "parietal cells", "HCl"
 
 PATTERN 7 — Genetics / molecular biology
   Bullet:   "BRCA1 and BRCA2 mutations increase risk of breast and ovarian cancer"
-  ✓ Return: "BRCA1", "BRCA2"
-  Bullet:   "mRNA is translated 5' → 3' by ribosomes in the cytoplasm"
-  ✓ Return: "5' → 3'", "ribosomes"
+  ✓ Return: "BRCA1", "BRCA2", "breast and ovarian cancer"
 
 PATTERN 8 — Pathway step / enzyme
   Bullet:   "Pyruvate decarboxylase converts pyruvate to acetyl-CoA in the mitochondria"
-  ✓ Return: "Pyruvate decarboxylase", "acetyl-CoA"
+  ✓ Return: "Pyruvate decarboxylase", "acetyl-CoA", "mitochondria"
 
-PATTERN 9 — Heading with no testable answer
-  Bullet:   "Overview:", "Key points:", "Note:", "Example:"
-  ✓ Return: nothing — skip headings with no specific answer to recall
-
-PATTERN 10 — Programming / CS (if slide is CS, not science)
-  Code block:  "struct Student {{ int studentID; string name; double gpa; }};"
-  ✓ Return: "struct"               ← ONLY the language keyword being taught
-  ✗ Never:  "studentID", "name", "gpa", "int", "double" — these are field names, not concepts
-  Bullet:   "enum Day {{ MONDAY, TUESDAY, WEDNESDAY }};"
-  ✓ Return: "enum"                 ← the keyword being taught, NEVER example names like MONDAY
-
-══════════════════════════════════════════════════════
-  QUICK SELF-CHECK before returning each term
-══════════════════════════════════════════════════════
-  □ Is it 1–4 words?                                              must be YES
-  □ Does it start with a banned filler word (R2)?                 must be NO
-  □ If I blank it out, does a readable question remain?           must be YES
-  □ Is it a specific, testable vocabulary term (not a definition word)?  must be YES
-  □ Is it copyright, publisher name, page number, or footer text? must be NO
-  □ Total terms ≤ 5?                                              must be YES
+PATTERN 9 — Programming / CS keyword
+  Code:     "struct Student {{ int studentID; string name; }};"
+  ✓ Return: "struct"   ← the language keyword being taught; NEVER example field names like studentID
+  Bullet:   "enum defines a named set of integer constants"
+  ✓ Return: "enum", "integer constants"
 {checklist_section}
 ════ SLIDE BODY TEXT (title already removed) ════
 {body_text}
 
-Return ONLY a valid JSON array of short strings. No markdown, no explanation, no extra text:
+Return ONLY a valid JSON array of short strings. No markdown, no explanation:
 ["term1", "term2", "term3"]"""
 
 CHECKLIST_SECTION = "\n━━ Study checklist — prioritize terms related to these topics ━━\n{checklist}\n"
@@ -449,25 +387,6 @@ _EXAMPLE_IDENTIFIER_NAMES = {
     "circle", "square", "triangle", "rectangle",
 }
 
-# Any term containing one of these words is a sentence fragment — reject it
-_SENTENCE_FRAGMENT_WORDS = {
-    "is", "are", "was", "were", "be", "been", "being",
-    "the", "a", "an",
-    "that", "which", "who", "whom",
-    "does", "do", "did", "not",
-    "to", "of", "in", "on", "at", "by", "for", "with", "from",
-    "and", "or", "but",
-    "can", "will", "would", "could", "should", "may", "might",
-    "this", "these", "those", "it", "its",
-    "use", "uses", "used", "using",
-    "allow", "allows", "allowed",
-    "define", "defines", "defined",
-    "create", "creates", "created",
-    "include", "includes", "including",
-    "refer", "refers", "referred",
-}
-
-
 def _term_overlaps_title(term: str, title_words: Set[str], title_str: str = "") -> bool:
     """True if the term overlaps significantly with the slide title."""
     if not title_words and not title_str:
@@ -574,9 +493,8 @@ def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) 
         filtered.append(term)
 
     # Hard cap: never return more than 5 terms regardless of what LLM said.
-    # Quality over quantity — pick the shortest/most specific terms first.
     if len(filtered) > 5:
-        filtered = sorted(filtered, key=lambda t: len(t.split()))[:5]
+        filtered = filtered[:5]
 
     return filtered
 
@@ -904,20 +822,10 @@ def _zones_from_text_data(
 
     body_stripped = body_text.strip()
 
-    # Section-divider detection: a plain short subtitle with no code, no facts.
-    # Must be very conservative — CS slides often have short code snippets that
-    # look similar (e.g. "workDay = 3; // Error!"). Any programming character
-    # or digit immediately disqualifies the slide from being a section divider.
-    _CODE_CHARS = frozenset('{};=()[]<>/*&|^~`\\_@#$%!0123456789')
-    is_section_divider = (
-        len(body_stripped) < 50
-        and not any(c in _CODE_CHARS for c in body_stripped)
-        and ":" not in body_stripped
-        and "." not in body_stripped
-        and body_stripped.count("\n") < 2
-    )
-    if is_section_divider:
-        logger.info(f"Section divider slide detected — skipping zone generation")
+    # Section-divider detection: only skip truly empty slides (no body content at all).
+    # Be very conservative — short CS/science slides with a few words still need zones.
+    if len(body_stripped) < 15:
+        logger.info("Section divider slide detected (empty body) — skipping zone generation")
         return []
 
     if body_stripped:
@@ -1011,9 +919,9 @@ def _call_vision_gemini(
         if master_topic:
             logger.info(f"Gemini master_topic: {repr(master_topic)}")
 
-        # Model signalled this is code or decorative — return empty, not None,
-        # so callers don't fall through to Groq/OCR fallbacks unnecessarily.
-        if master_topic in ("code", "decorative") or not data.get("cards"):
+        # Model signalled this is code or decorative — return empty list so callers
+        # know it's intentionally empty (not a failure), skipping Groq/OCR fallbacks.
+        if master_topic in ("code", "decorative"):
             return []
 
         zones = []
