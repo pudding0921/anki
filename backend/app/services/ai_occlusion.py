@@ -318,12 +318,25 @@ def _extract_title_info(page) -> tuple:
 
     max_size = max(s["size"] for s in all_spans)
 
-    # Title = all spans whose font size is within 15% of the largest font
-    title_spans = [s for s in all_spans if s["size"] >= max_size * 0.85]
+    # Title = all spans whose font size is within 30% of the largest font.
+    # Threshold lowered from 0.85 → 0.70 so multi-line titles with mixed fonts
+    # (e.g. monospace "enum" inline with large-font text) are fully captured.
+    title_spans = [s for s in all_spans if s["size"] >= max_size * 0.70]
+
+    # Also include any text in the top 22% of the page by y-position — catches
+    # second-line title words that use a slightly smaller or different font.
+    try:
+        page_h = page.rect.height
+        top_cutoff = page_h * 0.22
+        for s in all_spans:
+            if s not in title_spans and s["bbox"][1] < top_cutoff:
+                title_spans.append(s)
+    except Exception:
+        pass
 
     title_str = " ".join(s["text"].strip() for s in title_spans)
     title_word_set: Set[str] = {
-        w.lower().strip(".,;:!?()'\"[]{}")
+        w.lower().strip(".,;:!?()'\"[]{}\xa9\xae")  # strip © ® too
         for s in title_spans
         for w in s["text"].split()
         if len(w) > 1
@@ -360,7 +373,13 @@ def _extract_page_text_data(page) -> tuple:
 
     title_str, title_word_set, title_max_y = _extract_title_info(page)
     body_words = [w for w in words if w[1] >= title_max_y - 2]
-    body_text = " ".join(w[4] for w in body_words if w[4].strip())
+    # Strip leading © / ® bullet characters that PyMuPDF fuses with the first word
+    # of a line (e.g. "©You" → "You"). These are slide template bullets, not text.
+    _COPYRIGHT_PREFIX = ("©", "®", "\xa9", "\xae")
+    body_text = " ".join(
+        w[4].lstrip("".join(_COPYRIGHT_PREFIX)) if w[4].startswith(_COPYRIGHT_PREFIX) else w[4]
+        for w in body_words if w[4].strip()
+    )
     return words, title_str, title_word_set, title_max_y, body_text, blocks
 
 
@@ -377,9 +396,12 @@ _FILLER_WORDS = {
     "is", "are", "was", "were", "be", "been", "being",
     "the", "a", "an", "of", "in", "by", "via", "with", "from",
     "that", "which", "this", "these", "those", "for", "and", "or",
-    "can", "may", "will", "would", "could", "should",
+    "can", "may", "will", "would", "could", "should", "cannot", "must",
     "such", "as", "e.g", "i.e", "etc", "also", "to", "at", "on",
     "include", "includes", "including",
+    # Pronouns — never a key term
+    "you", "i", "we", "they", "he", "she", "it", "its", "your", "our",
+    "not", "no", "yes",
 }
 
 _FILLER_VERBS = {
@@ -534,6 +556,12 @@ def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) 
 
         # Skip very short terms
         if len(term.strip()) < 2:
+            continue
+
+        # Reject terms that start with © or ® — bullet/copyright character fused
+        # with the first word by PyMuPDF (e.g. "©You", "®Note")
+        if term.lstrip().startswith(("©", "®", "\xa9", "\xae")):
+            logger.info(f"Rejected (copyright prefix): {repr(term)}")
             continue
 
         filtered.append(term)
