@@ -255,23 +255,30 @@ Box must be TIGHT around the keyword/label only.
 
 DIAGRAM_VISION_PROMPT = """You are analyzing a medical or scientific diagram, figure, or image to build Anki image-occlusion flashcards.
 
-YOUR ONLY JOB: Find every text label visible in or around this image and box it.
+FIRST — identify what type of image this is:
+  • If it is a CODE BLOCK, CODE DIAGRAM, or PSEUDOCODE → return {"master_topic": "code", "cards": []}
+    Code examples are not diagrams. Variable names, field names, and example identifiers are never worth memorising.
+  • If it is a BOOK COVER, LOGO, DECORATIVE IMAGE, or BACKGROUND → return {"master_topic": "decorative", "cards": []}
 
-WHAT TO BOX — find ALL of these:
-  1. Labels that name anatomical structures (e.g. "aorta", "left atrium", "Bowman's capsule")
+Otherwise, find text labels that identify structures in the diagram:
+
+WHAT TO BOX:
+  1. Labels naming anatomical structures (e.g. "aorta", "left atrium", "Bowman's capsule")
   2. Text at the end of arrows or callout lines pointing to parts of the diagram
-  3. Numbered or lettered labels that identify components (e.g. "1", "A" near a structure)
-  4. Layer names, region names, zone names in the diagram
-  5. Cell types, tissue types, organelle names
-  6. Any pathological finding name or disease feature label
-  7. Drug target names, receptor labels, enzyme names
-  8. Any other text that identifies or names a visible structure
+  3. Layer names, region names, zone names
+  4. Cell types, tissue types, organelle names
+  5. Pathological finding names or disease feature labels
+  6. Drug target names, receptor labels, enzyme names
+
+NEVER BOX:
+  • Variable names, field names, or identifiers in code (studentID, name, gpa, workDay)
+  • Data type keywords used as mere examples (int, string, double, float)
+  • Book covers, publisher logos, decorative artwork
+  • The diagram title or heading
 
 IMPORTANT:
-  • You MUST find at least 1 box. If you see ANY label text, box it.
-  • Each box covers 1–4 words maximum
-  • Box the text label TIGHTLY — not the structure itself
-  • Even single-letter or single-number labels are worth boxing if they identify a structure
+  • Maximum 5 boxes per diagram
+  • Each box covers 1–4 words maximum — box tightly around the label only
 
 OUTPUT — strict JSON only, no markdown:
 {
@@ -565,6 +572,12 @@ def _post_filter_terms(terms: List[str], title_words: Set[str], title_str: str) 
             continue
 
         filtered.append(term)
+
+    # Hard cap: never return more than 5 terms regardless of what LLM said.
+    # Quality over quantity — pick the shortest/most specific terms first.
+    if len(filtered) > 5:
+        filtered = sorted(filtered, key=lambda t: len(t.split()))[:5]
+
     return filtered
 
 
@@ -966,9 +979,14 @@ def _call_vision_gemini(
             return None
 
         data = json.loads(match.group())
-        master_topic = data.get("master_topic", "")
+        master_topic = data.get("master_topic", "").lower()
         if master_topic:
             logger.info(f"Gemini master_topic: {repr(master_topic)}")
+
+        # Model signalled this is code or decorative — return empty, not None,
+        # so callers don't fall through to Groq/OCR fallbacks unnecessarily.
+        if master_topic in ("code", "decorative") or not data.get("cards"):
+            return []
 
         zones = []
         for card in data.get("cards", []):
@@ -1249,12 +1267,15 @@ def diagram_cards_for_pdf_page(page) -> List[Dict]:
             except Exception:
                 continue
 
-        # Try Gemini with diagram-specific prompt first (best for anatomy/science)
-        zones = _call_vision_gemini(image_bytes, diag_w, diag_h, prompt=DIAGRAM_VISION_PROMPT)
+        # Gemini with diagram-specific prompt — returns [] for code/decorative images
+        gemini_result = _call_vision_gemini(image_bytes, diag_w, diag_h, prompt=DIAGRAM_VISION_PROMPT)
 
-        # Gemini fallback: try with the general slide prompt
-        if not zones:
-            zones = _call_vision_gemini(image_bytes, diag_w, diag_h)
+        # [] means model said "code" or "decorative" — skip fallbacks entirely
+        if gemini_result is not None and len(gemini_result) == 0:
+            logger.info(f"Gemini classified diagram as code/decorative — skipping (xref={xref})")
+            continue
+
+        zones = gemini_result or []
 
         # Groq fallback
         if not zones:

@@ -486,8 +486,11 @@ async def _run_batch_occlusion_job_inner(
                     pages_direct: list = []
                     pages_for_vision = pages_with_uid
                 else:
-                    pages_direct = [p for p in pages_with_uid if p.get("pre_zones")]
-                    pages_for_vision = [p for p in pages_with_uid if not p.get("pre_zones")]
+                    # pre_zones=None  → Phase 2 failed, needs analyze_page
+                    # pre_zones=[]   → section divider (intentionally empty), skip vision
+                    # pre_zones=[..] → zones ready, write directly
+                    pages_direct = [p for p in pages_with_uid if p.get("pre_zones") is not None]
+                    pages_for_vision = [p for p in pages_with_uid if p.get("pre_zones") is None]
 
                 # Only call analyze_page for image slides or checklist re-extraction.
                 # Use a ThreadPoolExecutor instead of starmap so that a single
@@ -541,7 +544,6 @@ async def _run_batch_occlusion_job_inner(
                         pr = _write_page(db, p["page"], p["image_path"], int(p["width"]), int(p["height"]),
                                          p["pre_zones"], [])
                         results.append(pr)
-                        _batch_jobs[job_id]["done"] = len(results)
 
                     # Write vision-model results
                     for pr in vision_results:
@@ -550,9 +552,10 @@ async def _run_batch_occlusion_job_inner(
                             pr["zones"], pr["diagram_specs"],
                         )
                         results.append(page_result)
-                        _batch_jobs[job_id]["done"] = len(results)
 
                     db.commit()
+                    # Single status update after all writes — avoids O(n) dict writes in loop
+                    _batch_jobs[job_id]["done"] = len(results)
                 finally:
                     db.close()
                     db = None

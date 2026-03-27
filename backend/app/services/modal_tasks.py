@@ -236,8 +236,9 @@ def analyze_page(page: dict, checklist_text: Optional[str] = None) -> dict:
         except Exception as e:
             logger.warning(f"PDF analysis failed p{page_num}: {e}")
 
-    # Vision model fallback — only runs for image slides (zones still empty)
-    if not zones and image_path and image_path.startswith("http"):
+    # Vision model fallback — only runs when pre_zones was None (Phase 2 failed entirely).
+    # If pre_zones was [] (section divider / intentionally empty), trust it and skip vision.
+    if pre_zones is None and not zones and image_path and image_path.startswith("http"):
         try:
             resp = _req.get(image_path, timeout=30)
             resp.raise_for_status()
