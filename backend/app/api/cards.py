@@ -197,21 +197,36 @@ async def upload_pages(
             del content  # executor holds the ref; free local name
 
             async def stream_modal_pages():
-                # Send a heartbeat every 5 s while Modal is working.
-                # This keeps the HTTP connection alive through Render's proxy.
-                while not modal_future.done():
-                    yield json.dumps({"type": "heartbeat"}) + "\n"
-                    await asyncio.sleep(5)
                 try:
-                    pages = modal_future.result()
+                    # Emit total immediately — we know page_count before Modal starts,
+                    # so the UI shows the page count right away instead of waiting.
+                    yield json.dumps({"type": "total", "total": page_count}) + "\n"
+
+                    # Heartbeat every 3 s keeps the connection alive through Render's
+                    # 30-second idle proxy timeout while Modal renders and runs LLMs.
+                    while not modal_future.done():
+                        yield json.dumps({"type": "heartbeat"}) + "\n"
+                        await asyncio.sleep(3)
+
+                    try:
+                        pages = modal_future.result()
+                    except Exception as exc:
+                        logger.warning(f"Modal render failed: {exc}")
+                        yield json.dumps({"type": "error", "detail": "PDF rendering failed — please try again"}) + "\n"
+                        return
+
+                    for p in pages:
+                        yield json.dumps({"type": "page", **p}) + "\n"
+                    yield json.dumps({"type": "done", "pages": pages}) + "\n"
+
+                except GeneratorExit:
+                    pass  # client disconnected — clean exit, no error
                 except Exception as exc:
-                    logger.warning(f"Modal render failed: {exc}")
-                    yield json.dumps({"type": "error", "detail": "PDF rendering failed — please try again"}) + "\n"
-                    return
-                yield json.dumps({"type": "total", "total": len(pages)}) + "\n"
-                for p in pages:
-                    yield json.dumps({"type": "page", **p}) + "\n"
-                yield json.dumps({"type": "done", "pages": pages}) + "\n"
+                    logger.error(f"stream_modal_pages crashed: {exc}")
+                    try:
+                        yield json.dumps({"type": "error", "detail": "Internal error — please try again"}) + "\n"
+                    except Exception:
+                        pass  # can't write to a closed connection
 
             return StreamingResponse(
                 stream_modal_pages(),
@@ -258,10 +273,17 @@ async def upload_pages(
                         "source_pdf": source_pdf_url, "render_scale": _RENDER_SCALE,
                     }
 
-                page_data = await loop.run_in_executor(None, _render_one, page_index)
+                try:
+                    page_data = await loop.run_in_executor(None, _render_one, page_index)
+                except Exception as e:
+                    logger.warning(f"Page {page_index + 1} render failed: {e} — skipping")
+                    continue
                 pages.append(page_data)
                 yield json.dumps({"type": "page", **page_data}) + "\n"
 
+            if not pages:
+                yield json.dumps({"type": "error", "detail": "No pages could be rendered from this PDF"}) + "\n"
+                return
             yield json.dumps({"type": "done", "pages": pages}) + "\n"
 
     return StreamingResponse(
@@ -434,19 +456,47 @@ async def _run_batch_occlusion_job_inner(
                     pages_direct = [p for p in pages_with_uid if p.get("pre_zones")]
                     pages_for_vision = [p for p in pages_with_uid if not p.get("pre_zones")]
 
-                # Only call analyze_page for image slides or checklist re-extraction
+                # Only call analyze_page for image slides or checklist re-extraction.
+                # Use a ThreadPoolExecutor instead of starmap so that a single
+                # failed page never kills the entire batch — each page catches its
+                # own exception and returns empty zones instead of propagating.
                 if pages_for_vision:
                     loop = asyncio.get_running_loop()
                     inputs = [(p, checklist_text) for p in pages_for_vision]
+                    n_vision = len(inputs)
+                    _completed = [0]  # mutable counter — updated from threads
 
-                    def _run_starmap():
-                        out = []
-                        for pr in _modal_analyze.starmap(inputs):
-                            out.append(pr)
-                            _batch_jobs[job_id]["done"] = len(results) + len(out)
-                        return out
+                    def _run_all_parallel():
+                        from concurrent.futures import ThreadPoolExecutor as _TPE
 
-                    vision_results = await loop.run_in_executor(None, _run_starmap)
+                        def _call_one(args):
+                            page_data, cl_text = args
+                            try:
+                                result = _modal_analyze.remote(page_data, cl_text)
+                            except Exception as exc:
+                                logger.warning(
+                                    f"analyze_page failed p{page_data.get('page')}: {exc} — returning empty zones"
+                                )
+                                result = {
+                                    "page": page_data.get("page", 1),
+                                    "image_path": page_data.get("image_path", ""),
+                                    "img_w": int(page_data.get("width", 800)),
+                                    "img_h": int(page_data.get("height", 600)),
+                                    "zones": [],
+                                    "diagram_specs": [],
+                                }
+                            _completed[0] += 1
+                            job = _batch_jobs.get(job_id)
+                            if job:
+                                job["done"] = _completed[0]
+                            return result
+
+                        # One thread per page — each blocks on its Modal call.
+                        # Modal auto-scales containers, so all run in parallel.
+                        with _TPE(max_workers=min(n_vision, 20)) as pool:
+                            return list(pool.map(_call_one, inputs))
+
+                    vision_results = await loop.run_in_executor(None, _run_all_parallel)
                 else:
                     vision_results = []
 

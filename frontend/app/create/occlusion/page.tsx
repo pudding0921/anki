@@ -89,11 +89,12 @@ export default function OcclusionPage() {
       try {
         statusRes = await fetch(`${API_URL}/api/cards/batch-occlusion/status/${jobId}`, { headers: authHeader });
       } catch {
-        // Network error — server may be briefly restarting. Retry up to 4 times
-        // with exponential backoff before giving up.
+        // Network error — server may be briefly restarting (Render cold-start
+        // or OOM recovery can take up to 45s). Retry up to 6 times at 5s
+        // intervals (30s tolerance) before surfacing an error.
         networkErrors++;
-        if (networkErrors >= 4) throw new Error("Lost connection to server — please check your internet and try again.");
-        await new Promise((r) => setTimeout(r, 3000 * networkErrors));
+        if (networkErrors >= 6) throw new Error("Lost connection to server — please check your internet and try again.");
+        await new Promise((r) => setTimeout(r, 5000));
         continue;
       }
       networkErrors = 0;
