@@ -61,6 +61,7 @@ export function TrashModal({ isOpen, onClose, onRestored }: TrashModalProps) {
   const [data, setData] = useState<TrashData | null>(null);
   const [loading, setLoading] = useState(false);
   const [emptying, setEmptying] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -92,15 +93,21 @@ export function TrashModal({ isOpen, onClose, onRestored }: TrashModalProps) {
   }
 
   async function deleteForever(type: "folder" | "deck" | "card", id: number) {
-    await apiFetch(`/api/trash/${type}/${id}`, { method: "DELETE" });
-    setData((prev) => {
-      if (!prev) return prev;
-      return {
-        folders: type === "folder" ? prev.folders.filter((f) => f.id !== id) : prev.folders,
-        decks: type === "deck" ? prev.decks.filter((d) => d.id !== id) : prev.decks,
-        cards: type === "card" ? prev.cards.filter((c) => c.id !== id) : prev.cards,
-      };
-    });
+    const key = `${type}-${id}`;
+    setDeletingId(key);
+    try {
+      await apiFetch(`/api/trash/${type}/${id}`, { method: "DELETE" });
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          folders: type === "folder" ? prev.folders.filter((f) => f.id !== id) : prev.folders,
+          decks: type === "deck" ? prev.decks.filter((d) => d.id !== id) : prev.decks,
+          cards: type === "card" ? prev.cards.filter((c) => c.id !== id) : prev.cards,
+        };
+      });
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   async function emptyTrash() {
@@ -180,6 +187,7 @@ export function TrashModal({ isOpen, onClose, onRestored }: TrashModalProps) {
                   daysRemaining={f.days_remaining}
                   onRestore={() => restore("folder", f.id)}
                   onDeleteForever={() => deleteForever("folder", f.id)}
+                  isDeleting={deletingId === `folder-${f.id}`}
                 />
               ))}
             </section>
@@ -198,6 +206,7 @@ export function TrashModal({ isOpen, onClose, onRestored }: TrashModalProps) {
                   daysRemaining={d.days_remaining}
                   onRestore={() => restore("deck", d.id)}
                   onDeleteForever={() => deleteForever("deck", d.id)}
+                  isDeleting={deletingId === `deck-${d.id}`}
                 />
               ))}
             </section>
@@ -216,6 +225,7 @@ export function TrashModal({ isOpen, onClose, onRestored }: TrashModalProps) {
                   daysRemaining={c.days_remaining}
                   onRestore={() => restore("card", c.id)}
                   onDeleteForever={() => deleteForever("card", c.id)}
+                  isDeleting={deletingId === `card-${c.id}`}
                 />
               ))}
             </section>
@@ -239,12 +249,14 @@ function TrashRow({
   daysRemaining,
   onRestore,
   onDeleteForever,
+  isDeleting,
 }: {
   name: string;
   subtitle: string;
   daysRemaining: number;
   onRestore: () => void;
   onDeleteForever: () => void;
+  isDeleting: boolean;
 }) {
   return (
     <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-border bg-background hover:bg-muted/30 transition-colors">
@@ -254,11 +266,11 @@ function TrashRow({
       </div>
       <DaysTag days={daysRemaining} />
       <div className="flex gap-1.5 shrink-0">
-        <Button variant="outline" size="sm" onClick={onRestore}>
+        <Button variant="outline" size="sm" onClick={onRestore} disabled={isDeleting}>
           Restore
         </Button>
-        <Button variant="destructive" size="sm" onClick={onDeleteForever}>
-          Delete Forever
+        <Button variant="destructive" size="sm" onClick={onDeleteForever} disabled={isDeleting}>
+          {isDeleting ? "Deleting…" : "Delete Forever"}
         </Button>
       </div>
     </div>
