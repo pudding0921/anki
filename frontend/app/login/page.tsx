@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { API_URL } from "@/lib/api";
 
 export default function LoginPage() {
@@ -11,6 +10,11 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [justRegistered, setJustRegistered] = useState(false);
   const [warming, setWarming] = useState(false);
+  const [resendingVerification, setResendingVerification] = useState(false);
+  const [verificationNotice, setVerificationNotice] = useState("");
+
+  const needsVerificationHelp =
+    justRegistered || error.toLowerCase().includes("verify your email");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -33,6 +37,7 @@ export default function LoginPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    setVerificationNotice("");
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/auth/login`, {
@@ -52,6 +57,32 @@ export default function LoginPage() {
       setError("Could not reach the server. Please try again.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleResendVerification() {
+    setError("");
+    setVerificationNotice("");
+    setResendingVerification(true);
+    try {
+      const res = await fetch(`${API_URL}/api/auth/resend-verification`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setVerificationNotice(
+          data.message ||
+            "If that account exists and is unverified, a new verification link has been sent.",
+        );
+      } else {
+        setError(data.detail || "Could not resend verification email. Please try again.");
+      }
+    } catch {
+      setError("Could not reach the server. Please try again.");
+    } finally {
+      setResendingVerification(false);
     }
   }
 
@@ -80,7 +111,7 @@ export default function LoginPage() {
         <div className="glass rounded-2xl p-7 flex flex-col gap-5">
           {justRegistered && (
             <div className="text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
-              Account created! Sign in to start studying.
+              Account created! Please verify your email from your inbox before signing in.
             </div>
           )}
           {warming && !error && (
@@ -91,6 +122,11 @@ export default function LoginPage() {
           {error && (
             <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
               {error}
+            </div>
+          )}
+          {verificationNotice && (
+            <div className="text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
+              {verificationNotice}
             </div>
           )}
 
@@ -131,6 +167,18 @@ export default function LoginPage() {
               {loading ? "Logging in…" : "Log in"}
             </button>
           </form>
+
+          {needsVerificationHelp && (
+            <button
+              type="button"
+              onClick={handleResendVerification}
+              disabled={resendingVerification || !email || !password}
+              className="text-sm text-indigo-400 hover:text-indigo-300 font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed text-center"
+              title={!email || !password ? "Enter email and password first" : undefined}
+            >
+              {resendingVerification ? "Sending verification email…" : "Resend verification email"}
+            </button>
+          )}
 
           <p className="text-sm text-center text-muted-foreground">
             No account?{" "}
